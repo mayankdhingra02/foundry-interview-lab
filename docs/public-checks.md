@@ -1,0 +1,11 @@
+# Public check source viewer
+
+The learner workspace includes a read-only **Public checks** disclosure beside test output. It shows only the saved scenario's authored checks whose `visible` field is exactly `true` and whose source is present. Each check has a native keyboard-operable disclosure and a focusable source region. Source is rendered as React text inside `pre`, so markup in a check remains quoted code rather than executable HTML. Long lines wrap within the existing mobile test panel.
+
+The viewer uses `session.scenario`, preserving the package version admitted to that attempt instead of substituting the latest catalog. It remains available during coding, frozen-code debrief, and completed review under **View saved workspace and conversation**. Historical attempts without public source display an unavailable state rather than borrowing a newer package's checks.
+
+The server's `toPublicScenario` projection remains the privacy boundary: it excludes protected source, reference solutions, probes, and unrevealed hints. The viewer additionally filters by visibility before rendering. This client filter is not a replacement for server isolation or a guarantee that an incorrectly transported secret cannot be read from network traffic.
+
+Opening a check makes no mutation, provider, or execution request. Authored source is separate from actual executed observations and does not establish that a check passed. Existing runner availability, snapshot/run provenance, output, and correctness wording remain unchanged. This patch does not implement learner test creation, custom-check execution, a terminal, or regression authoring; those require separate workspace and isolated-runner contracts.
+
+`tests/e2e/public-checks.spec.ts` covers source before any run, escaped markup, exclusion of protected source from display, keyboard expansion/focus, long source on a narrow viewport, refresh and completed review with an older admitted package, and historical missing-source fallback. Browser HTTP fixtures deliberately include protected source to test defensive display filtering; production transport tests independently verify that protected source is omitted. These browser checks do not run Python, Docker, models, or live providers, and do not qualify the authored checks' semantic quality.
