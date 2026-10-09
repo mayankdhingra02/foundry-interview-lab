@@ -1,5 +1,6 @@
 import { Pool, type PoolClient } from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { isDeepStrictEqual } from 'node:util';
 import { canonical, digest, DomainError, requestKey } from '../interview-practice/domain';
 import type { EvidenceManifest, PracticeDatabase, ReviewDatabase, Session } from '../interview-practice/types';
 import { emptyDatabase, validateStoredEvents, type PracticeStore } from './store';
@@ -235,7 +236,12 @@ export class PostgresPracticeStore implements PracticeStore {
     for (const row of previous.rows) if (!current.has(row.key)) {
       await client.query(`delete from public.${next.table} where ${next.keys.map((key, i) => `${key}=$${i + 1}`).join(' and ')}`, next.keys.map(key => row.columns[key]));
     }
-    for (const row of next.rows) if (!old.has(row.key) || persistedCanonical(old.get(row.key)!.value) !== persistedCanonical(row.value)) await this.upsert(client, next, row);
+    for (const row of next.rows) {
+      const previousRow = old.get(row.key);
+      // Unchanged decoded values need no JSON/sort allocations. Values that
+      // differ still use the existing JSON-normalized comparison semantics.
+      if (!previousRow || (!isDeepStrictEqual(previousRow.value, row.value) && persistedCanonical(previousRow.value) !== persistedCanonical(row.value))) await this.upsert(client, next, row);
+    }
   }
   private validateImmutable(before: PracticeDatabase, after: PracticeDatabase) {
     for (const session of Object.values(after.sessions)) {
