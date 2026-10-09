@@ -6,7 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { PostgresPracticeStore } from '../lib/server/postgres-store';
 import { SessionService } from '../lib/server/session-service';
-import type { CoachOutput, Scenario } from '../lib/interview-practice/types';
+import type { CoachOutput, LedgerEntry, Scenario } from '../lib/interview-practice/types';
 
 // Explicit opt-in: never uses DATABASE_URL or any hosted account. No existing database/container is modified.
 const enabled = process.env.RUN_POSTGRES_INTEGRATION === '1';
@@ -34,7 +34,7 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     for (let i = 0; i < 80; i++) { try { await pool.query('select 1'); ready = true; break; } catch { await delay(100); } }
     if (!ready) throw new Error('Disposable PostgreSQL did not become ready.');
     await pool.query(`create schema auth; create table auth.users (id uuid primary key); create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls; grant usage on schema public,auth to anon,authenticated,service_role; create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$; grant execute on function auth.uid() to anon,authenticated,service_role;`);
-    for (const file of ['202610090001_ai_practice_foundation.sql', '202610090002_runtime_persistence.sql', '202610090007_event_contract.sql']) await pool.query(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
+    for (const file of ['202610090001_ai_practice_foundation.sql', '202610090002_runtime_persistence.sql', '202610090007_event_contract.sql', '202610090008_private_job_reads.sql']) await pool.query(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     // Runtime qualification uses the actual service-role grants, rather than table-owner privileges.
     servicePool = new Pool({ host: '127.0.0.1', port: Number(port), user: 'postgres', password: 'disposable_foundry_test_only', database: 'foundry_test', options: '-c role=service_role', max: 8 });
     expect((await servicePool.query('select current_user')).rows[0].current_user).toBe('service_role');
@@ -82,6 +82,59 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     const restricted = new PostgresPracticeStore(servicePool, { maxStateBytes: 1 });
     await expect(restricted.read()).rejects.toMatchObject({ code: 'unavailable' });
     expect((await service.getSession(ownerA, session.id)).files).toEqual(session.files);
+  });
+  it('rolls back a projected row-cap crossing and keeps acknowledged work readable and deletable', async () => {
+    const restrictedStore = new PostgresPracticeStore(servicePool, { maxEntityRows: 2 });
+    const restricted = new SessionService(restrictedStore, () => fixture);
+    const created = (await restricted.createSession(ownerA, { scenarioId: fixture.id, requestId: req() })).session;
+    const saved = (await restricted.saveWorkspace(ownerA, created.id, { ...mut(created.revision), files: { 'service.py': 'last acknowledged content' } })).session;
+    const rejectedKey = req(), before = await restrictedStore.read();
+    await expect(restricted.saveWorkspace(ownerA, created.id, { requestId: rejectedKey, expectedRevision: saved.revision, files: { 'service.py': 'must roll back' } })).rejects.toMatchObject({ code: 'unavailable' });
+    expect(await restrictedStore.read()).toEqual(before);
+    expect((await pool.query('select (select count(*) from ai_practice_snapshots)::int as snapshots,(select count(*) from ai_practice_events)::int as events,(select count(*) from ai_practice_requests)::int as requests')).rows[0]).toEqual({ snapshots: 2, events: 2, requests: 2 });
+    expect((await restricted.getSession(ownerA, created.id)).files['service.py']).toBe('last acknowledged content');
+    await restricted.deleteSession(ownerA, created.id, { requestId: req() });
+    expect(await restricted.listSessions(ownerA)).toEqual([]);
+    expect((await restrictedStore.read()).deletions).toHaveLength(1);
+  });
+  it('rolls back exact JSONB payload-byte overflow that fits the earlier whole-state JSON guard', async () => {
+    const before = await store.read(), now = '2026-10-09T12:00:00.000Z';
+    const ledger: LedgerEntry[] = Array.from({ length: 100 }, () => { const id = req(); return { id, ownerId: ownerA, sessionId: req(), operationId: `${id}:admission`, kind: 'admission', amountUsd: 0, createdAt: now }; });
+    const maximum = Buffer.byteLength(JSON.stringify({ ...before, ledger }));
+    // This is the adapter's exact persisted metric, not a JavaScript estimate.
+    const sqlBytes = Number((await pool.query('select sum(octet_length(entry::text))::text as bytes from jsonb_array_elements($1::jsonb) as elements(entry)', [JSON.stringify(ledger)])).rows[0].bytes);
+    expect(sqlBytes).toBeGreaterThan(maximum);
+    const restricted = new PostgresPracticeStore(servicePool, { maxStateBytes: maximum });
+    await expect(restricted.transaction(db => { db.ledger.push(...ledger); })).rejects.toMatchObject({ code: 'unavailable' });
+    expect(await restricted.read()).toEqual(before);
+    expect((await pool.query('select count(*)::int as count from ai_practice_usage_ledger')).rows[0].count).toBe(0);
+    // A later bounded write is still possible; overflow did not strand the store.
+    await restricted.transaction(db => { db.ledger.push(ledger[0]); });
+    expect((await restricted.read()).ledger).toEqual([ledger[0]]);
+  });
+  it('denies direct owner/anonymous job and inference reads while trusted jobs and redacted API views work', async () => {
+    const session = await create(); await service.requestAssistant(ownerA, session.id, { ...mut(session.revision), mode: 'ask', message: 'PRIVATE-GENERATION-INPUT' });
+    const claim = (await service.claimJob('private-fixture-worker'))!;
+    const trusted = (await servicePool.query('select claim_token,runtime_payload from public.ai_practice_jobs')).rows[0];
+    expect(trusted.claim_token).toBe(claim.claimToken); expect(trusted.runtime_payload.input.prompt).toBe('PRIVATE-GENERATION-INPUT');
+    const view = await service.getSession(ownerA, session.id);
+    expect(view.jobs[0]).not.toHaveProperty('claimToken'); expect(view.jobs[0]).not.toHaveProperty('input');
+    for (const table of ['ai_practice_jobs','ai_practice_ai_calls']) {
+      const grants = (await pool.query('select has_table_privilege($1,$2,$3) as table_read,has_any_column_privilege($1,$2,$3) as column_read', ['authenticated',`public.${table}`,'SELECT'])).rows[0];
+      expect(grants).toEqual({ table_read: false, column_read: false });
+      for (const actor of [ownerA,ownerB]) {
+        const client = await pool.connect();
+        try {
+          await client.query('begin; set local role authenticated'); await client.query("select set_config('request.jwt.claim.sub',$1,true)", [actor]);
+          await expect(client.query(`select * from public.${table}`)).rejects.toMatchObject({ code: '42501' });
+        } finally { await client.query('rollback'); client.release(); }
+      }
+      const client = await pool.connect();
+      try { await client.query('begin; set local role anon'); await expect(client.query(`select * from public.${table}`)).rejects.toMatchObject({ code: '42501' }); }
+      finally { await client.query('rollback'); client.release(); }
+    }
+    expect((await servicePool.query('select count(*)::int as count from public.ai_practice_ai_calls')).rows[0].count).toBe(0);
+    expect(await service.completeJob(claim, { kind: 'assistant', model: 'synthetic-fixture', message: 'A synthetic answer.', actualUsd: 0 })).toBe(true);
   });
   it('enforces actual SQL RLS, anonymous denial and composite owner relationships', async () => {
     const a = await create(ownerA); await create(ownerB);

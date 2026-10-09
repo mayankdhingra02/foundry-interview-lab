@@ -15,6 +15,7 @@ const json = (value: unknown) => JSON.stringify(value);
 const persistedCanonical = (value: unknown) => canonical(JSON.parse(json(value)));
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const unavailable = () => new DomainError('unavailable', 'PostgreSQL practice storage is unavailable. Retry the same request key; private data was not logged.');
+const capacityExceeded = () => new DomainError('unavailable', 'The initial persistence adapter capacity was reached. Changes were rolled back without truncation; qualify a scoped adapter before expanding capacity.');
 function rows(table: string, values: EntityRow[], keys = ['id']): TableSpec { return { table, keys, rows: values }; }
 function entity(key: string, value: unknown, columns: Record<string, unknown>): EntityRow { return { key, value, columns: { ...columns, runtime_payload: json(value) } }; }
 function reviewSpecifications(database: PracticeDatabase): TableSpec[] {
@@ -102,22 +103,27 @@ export class PostgresPracticeStore implements PracticeStore {
   private async setup(client: PoolClient) {
     await client.query("select set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true), set_config('idle_in_transaction_session_timeout', $1, true)", [String(this.options.statementTimeoutMs), String(this.options.lockTimeoutMs)]);
   }
-  private async load(client: PoolClient): Promise<PracticeDatabase> {
-    const db = emptyDatabase(), records = new Map<string, RawRow[]>();
-    // Additive rollout: baseline practice remains readable before the optional review migration.
-    const reviewReady = Boolean((await client.query("select to_regclass('public.ai_practice_review_cases') as table_name")).rows[0].table_name);
-    const present = [...tables, ...(reviewReady ? reviewTables : [])];
+  private async preflight(client: PoolClient, present: readonly string[]): Promise<Map<string, number>> {
     // Identifiers come only from the fixed table lists above. Preflight all tables
     // in one request before transferring any private entity payloads.
     const sizes = await client.query<{ table_name: string; bytes: string; count: string }>(present.map(table => `select '${table}'::text as table_name, coalesce(sum(octet_length(runtime_payload::text)),0)::text as bytes, count(*)::text as count from public.${table}`).join(' union all '));
     const counts = new Map<string, number>(); let totalBytes = 0;
     for (const row of sizes.rows) {
       const bytes = Number(row.bytes), count = Number(row.count);
-      if (!present.includes(row.table_name as typeof present[number]) || counts.has(row.table_name) || !Number.isSafeInteger(bytes) || bytes < 0 || !Number.isSafeInteger(count) || count < 0) throw unavailable();
-      totalBytes += bytes; counts.set(row.table_name, count); records.set(row.table_name, []);
-      if (totalBytes > this.options.maxStateBytes || count > this.options.maxEntityRows) throw new DomainError('unavailable', 'The initial persistence adapter capacity was reached. Data was not truncated; qualify a scoped adapter before expanding capacity.');
+      if (!present.includes(row.table_name) || counts.has(row.table_name) || !Number.isSafeInteger(bytes) || bytes < 0 || !Number.isSafeInteger(count) || count < 0) throw unavailable();
+      totalBytes += bytes; counts.set(row.table_name, count);
+      if (totalBytes > this.options.maxStateBytes || count > this.options.maxEntityRows) throw capacityExceeded();
     }
     if (counts.size !== present.length) throw unavailable();
+    return counts;
+  }
+  private async load(client: PoolClient): Promise<PracticeDatabase> {
+    const db = emptyDatabase(), records = new Map<string, RawRow[]>();
+    // Additive rollout: baseline practice remains readable before the optional review migration.
+    const reviewReady = Boolean((await client.query("select to_regclass('public.ai_practice_review_cases') as table_name")).rows[0].table_name);
+    const present = [...tables, ...(reviewReady ? reviewTables : [])];
+    const counts = await this.preflight(client, present);
+    for (const table of present) records.set(table, []);
     // A tagged row stream avoids one network roundtrip per table and avoids a
     // single giant JSON aggregate. to_jsonb keeps nested JSON payloads typed.
     const result = await client.query<{ table_name: string; entity: RawRow }>(present.map(table => `select '${table}'::text as table_name, to_jsonb(entity) as entity from public.${table} as entity`).join(' union all '));
@@ -238,6 +244,10 @@ export class PostgresPracticeStore implements PracticeStore {
     validateStoredEvents(after);
     this.validateImmutable(before, after);
     const previous = specifications(before), next = specifications(after);
+    // Reject projected table growth before any entity writes. The existing
+    // whole-state guard bounds memory; it cannot substitute for JSONB's actual
+    // persisted text metric, which is checked again before COMMIT below.
+    if (next.some(spec => spec.rows.length > this.options.maxEntityRows)) throw capacityExceeded();
     // Durable deletion metadata survives auth/session cascades and is committed atomically with removal.
     const deletion = next.find(s => s.table === 'ai_practice_deletions')!;
     await this.sync(client, deletion, previous.find(s => s.table === deletion.table)!);
@@ -253,6 +263,10 @@ export class PostgresPracticeStore implements PracticeStore {
       // Session deletion already cascades private children. The generic diff may harmlessly delete absent rows.
       await this.sync(client, spec, previous.find(s => s.table === spec.table)!);
     }
+    // Use the same table scope and byte/count metric as load while the same
+    // transaction and advisory lock are held. Overflow rolls every write back
+    // so the last acknowledged state remains readable, including for erasure.
+    await this.preflight(client, [...tables, ...(before.reviews ? reviewTables : [])]);
   }
   async read(): Promise<PracticeDatabase> {
     let client: PoolClient | undefined;
