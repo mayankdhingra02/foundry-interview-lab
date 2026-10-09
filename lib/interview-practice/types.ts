@@ -1,4 +1,5 @@
 import type { PracticeEvent } from './events';
+import type { LearnerCheckBinding } from './check-policy';
 import type { PracticeSetupConditions } from './timing';
 export type { EventType, PracticeEvent } from './events';
 
@@ -25,7 +26,7 @@ export type Snapshot = { id: string; sequence: number; createdAt: string; sha256
 export type Turn = { id: string; role: 'interviewer' | 'learner'; text: string; source: 'typed' | 'transcribed' | 'corrected' | 'model' | 'authored'; createdAt: string; replyTo?: string; competencyId?: string; evidenceIds: string[] };
 export type TestObservation = { id: string; title: string; status: 'passed' | 'failed' | 'error' | 'skipped'; detail?: string };
 export type RunExecution = { status: 'completed' | 'infrastructure_error' | 'timeout'; command: string; stdout: string; stderr: string; exitCode: number | null; tests: TestObservation[]; durationMs: number; runtimeDigest?: string };
-export type TestRun = RunExecution & { id: string; jobId: string; snapshotId: string; snapshotSha256: string; createdAt: string; testSuiteDigest: string };
+export type TestRun = RunExecution & { id: string; jobId: string; snapshotId: string; snapshotSha256: string; createdAt: string; testSuiteDigest: string; learnerCheck?: LearnerCheckBinding };
 export type AssistantMessage = { id: string; role: 'learner' | 'assistant'; text: string; createdAt: string; model?: string; mode?: 'ask' | 'plan' | 'edit' };
 export type EditProposal = { id: string; jobId: string; baseSnapshotId: string; baseSha256: string; files: Record<string, string>; status: 'pending' | 'accepted' | 'rejected'; createdAt: string; decidedAt?: string; undoneAt?: string; undoSnapshotId?: string };
 export type EvidenceItem = { id: string; kind: 'snapshot' | 'test' | 'utterance' | 'edit-decision' | 'assistant'; label: string; content: string; sha256: string; snapshotId?: string; file?: string; testId?: string; turnId?: string; runId?: string; source: string };

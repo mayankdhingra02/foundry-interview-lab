@@ -1,0 +1,11 @@
+.learner-checks-panel { margin:0 0 16px; padding:0 0 14px; border-bottom:1px solid var(--line); min-width:0; }
+.learner-checks-panel > summary { font-size:13px; font-weight:600; }
+.learner-checks-panel p,.check-run-results > p { font-size:12px; line-height:1.6; margin:10px 0; overflow-wrap:anywhere; }
+.learner-checks-panel label { font-size:12px; font-weight:600; margin:12px 0 6px; display:block; }
+.learner-checks-panel textarea { width:100%; max-width:100%; min-height:180px; resize:vertical; font-family:var(--mono); font-size:13px; line-height:1.6; white-space:pre; }
+.learner-check-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.learner-check-binding { border-top:1px solid var(--line); margin-top:14px; padding-top:4px; }
+.check-run-results h3 { font-size:13px; margin:10px 0; }
+.previous-authored-run { margin-top:16px; border-top:1px solid var(--line); padding-top:12px; }
+.previous-authored-run > summary { font-size:12px; font-weight:600; }
+@media(max-width:720px) { .learner-check-actions .button { white-space:normal; text-align:left; } .learner-checks-panel textarea { font-size:14px; } }

@@ -5,8 +5,10 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { validateFiles } from '../interview-practice/domain';
 import type { RunExecution, Scenario, ScenarioTest, TestObservation } from '../interview-practice/types';
 import { configuredRuntimeBinding, parseRuntimeBinding, runtimeBindingConfigured, type RuntimeBinding } from './binding';
+import { selectRunSuite } from '../interview-practice/learner-checks';
+import type { RunSelection } from '../interview-practice/check-policy';
 
-export type ExecuteOptions = { signal?: AbortSignal; includeProtected?: boolean; runtimeBinding?: RuntimeBinding };
+export type ExecuteOptions = { signal?: AbortSignal; includeProtected?: boolean; runtimeBinding?: RuntimeBinding; selection?: RunSelection };
 type CommandResult = { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean; aborted: boolean; outputLimited: boolean; error?: string };
 type CommandOptions = { signal?: AbortSignal; timeoutMs: number; maxOutputBytes?: number; input?: string };
 type CheckResult = { id: string; status: TestObservation['status']; testsRun: number; detail: string };
@@ -193,7 +195,9 @@ export async function executeScenario(scenario: Scenario, files: Record<string, 
     binding = options.runtimeBinding === undefined ? configuredRuntimeBinding(packageCopy) : parseRuntimeBinding(options.runtimeBinding, packageCopy.runtime.image);
     if (!binding) return base('infrastructure_error', 'A reviewed immutable Python runtime binding is required. Learner code was not executed.');
   } catch (error) { return base('infrastructure_error', error instanceof Error ? error.message : 'Execution input was rejected.'); }
-  const tests = packageCopy.tests.filter(test => options.includeProtected === true || test.visible);
+  let tests: ScenarioTest[];
+  try { tests = options.selection === undefined || options.selection === 'authored' ? packageCopy.tests.filter(test => options.includeProtected === true || test.visible) : selectRunSuite(packageCopy, snapshot, options.selection).tests; }
+  catch { return base('infrastructure_error', 'The learner check source or execution policy is unavailable. No authored contract is replaced.'); }
   if (!tests.length || tests.length > MAX_SUITES) return base('infrastructure_error', 'The admitted scenario must have between one and eight selected check files.');
   const deadline = started + Math.max(1, Math.min(60, packageCopy.runtime.timeoutSeconds)) * 1_000;
   const imageId = binding.imageId;

@@ -7,6 +7,8 @@ import type { InferenceRecord, JobClaim, JobKind, JobResult, JobView, Mutation, 
 import type { PracticeStore } from './store';
 import { configuredRuntimeBinding, parseRuntimeBinding, type RuntimeBinding } from '../runtime/binding';
 import { assertRequestNotErased, rememberErasedRequests } from './deleted-requests';
+import type { RunSelection } from '../interview-practice/check-policy';
+import { admittedRunSuite, selectRunSuite } from '../interview-practice/learner-checks';
 import { MAX_ADVISORY_MINUTES, practiceConditionsSchema, setupExtraMinutes } from '../interview-practice/timing';
 
 export type SessionAdmissionContext = { ownerId: string; sessionId: string; scenarioId: string; scenarioVersion: string; requestId: string; now: string; database: PracticeDatabase };
@@ -231,14 +233,17 @@ export class SessionService {
       return { session: sessionView(session), job: publicJob(job) };
     });
   }
-  async requestRun(ownerId: string, id: string, input: Mutation, freshWorkGuard?: FreshWorkGuard): Promise<SessionMutationResult> {
-    return this.mutate(ownerId, input.requestId, 'run', {}, id, (db, now) => {
+  async requestRun(ownerId: string, id: string, input: Mutation & { selection?: RunSelection }, freshWorkGuard?: FreshWorkGuard): Promise<SessionMutationResult> {
+    const selection = input.selection ?? 'authored';
+    // Preserve exact replay fingerprints for historical/default authored runs.
+    return this.mutate(ownerId, input.requestId, 'run', selection === 'authored' ? {} : { selection }, id, (db, now) => {
       freshWorkGuard?.();
       const session = ownedSession(db.sessions, ownerId, id); assertRevision(session, input.expectedRevision); assertActive(session);
       if (session.frozenEvidence) throw new DomainError('conflict', 'Final evidence is frozen.');
       const scenario = this.scenario(session), runtimeBinding = parseRuntimeBinding(this.resolveRuntimeBinding(scenario), scenario.runtime.image);
       if (!runtimeBinding) throw new DomainError('unavailable', 'Code execution is unavailable until a reviewed runtime is configured. Your saved work is available.');
-      const job = this.enqueue(db, session, 'run', input.requestId, { testSuiteDigest: digest(scenario.tests), runtime: scenario.runtime, runtimeBinding }, now);
+      const suite = selectRunSuite(scenario, selectedSnapshot(session).files, selection);
+      const job = this.enqueue(db, session, 'run', input.requestId, { testSuiteDigest: digest(suite.tests), runtime: scenario.runtime, runtimeBinding, ...(suite.learnerCheck ? { selection: 'learner', learnerCheck: suite.learnerCheck } : {}) }, now);
       appendEvent(session, 'test.requested', { jobId: job.id, snapshotId: job.snapshotId }, input.requestId, now, 'learner');
       return { session: sessionView(session), job: publicJob(job) };
     });
@@ -363,11 +368,14 @@ export class SessionService {
       if (!snapshot) throw new DomainError('unavailable', 'Admitted snapshot not found.');
       if (result.kind === 'run') {
         const run = result.run;
+        if (digest(job.input) !== job.fingerprint || digest(snapshot.files) !== snapshot.sha256) throw new DomainError('invalid', 'Run input or workspace snapshot no longer matches its admitted identity.');
+        const suite = admittedRunSuite(scenario, snapshot.files, job.input);
         const binding = parseRuntimeBinding(job.input.runtimeBinding, scenario.runtime.image);
-        if (!['completed', 'infrastructure_error', 'timeout'].includes(run.status) || !Number.isFinite(run.durationMs) || run.durationMs < 0 || typeof run.command !== 'string' || run.command.length > 1000 || typeof run.stdout !== 'string' || typeof run.stderr !== 'string' || run.stdout.length + run.stderr.length > 128_000 || !Array.isArray(run.tests) || run.tests.length > 100 || new Set(run.tests.map(t => t.id)).size !== run.tests.length || run.tests.some(t => !scenario.tests.some(test => test.id === t.id) || !['passed', 'failed', 'error', 'skipped'].includes(t.status) || typeof t.title !== 'string' || (t.detail?.length ?? 0) > 5000)) throw new DomainError('invalid', 'Runner returned invalid or unknown test observations.');
+        if (!['completed', 'infrastructure_error', 'timeout'].includes(run.status) || !Number.isFinite(run.durationMs) || run.durationMs < 0 || typeof run.command !== 'string' || run.command.length > 1000 || typeof run.stdout !== 'string' || typeof run.stderr !== 'string' || run.stdout.length + run.stderr.length > 128_000 || !Array.isArray(run.tests) || run.tests.length > 100 || new Set(run.tests.map(t => t.id)).size !== run.tests.length || run.tests.some(t => !suite.tests.some(test => test.id === t.id) || !['passed', 'failed', 'error', 'skipped'].includes(t.status) || typeof t.title !== 'string' || (t.detail?.length ?? 0) > 5000) || (suite.learnerCheck && run.status === 'completed' && run.tests.length !== 1)) throw new DomainError('invalid', 'Runner returned invalid or unknown test observations.');
         if (!binding || (run.runtimeDigest !== undefined && run.runtimeDigest !== binding.imageId) || ((run.status === 'completed' || run.tests.some(test => test.status !== 'skipped')) && run.runtimeDigest !== binding.imageId)) throw new DomainError('invalid', 'Run evidence does not match its admitted immutable runtime. No test evidence was accepted.');
         if (run.status !== 'completed' && run.tests.length && run.tests.every(t => t.status === 'passed')) throw new DomainError('invalid', 'An incomplete run cannot claim every reported check passed. Retain completed observations alongside explicit missing checks.');
-        const record = { ...structuredClone(run), id: randomUUID(), jobId: job.id, snapshotId: snapshot.id, snapshotSha256: snapshot.sha256, testSuiteDigest: String(job.input.testSuiteDigest), createdAt: now };
+        // Provenance is derived from immutable admission, never a worker label.
+        const record = { status: run.status, command: run.command, stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode, tests: structuredClone(run.tests), durationMs: run.durationMs, ...(run.runtimeDigest === undefined ? {} : { runtimeDigest: run.runtimeDigest }), id: randomUUID(), jobId: job.id, snapshotId: snapshot.id, snapshotSha256: snapshot.sha256, testSuiteDigest: String(job.input.testSuiteDigest), createdAt: now, ...(suite.learnerCheck ? { learnerCheck: suite.learnerCheck } : {}) };
         session.runs.push(record); appendEvent(session, 'test.completed', { runId: record.id, jobId: job.id, snapshotId: snapshot.id, status: run.status }, job.requestId, now, 'runner');
       } else if (result.kind === 'interviewer') {
         if (session.frozenEvidence || session.stageId !== 'debrief') return false;
