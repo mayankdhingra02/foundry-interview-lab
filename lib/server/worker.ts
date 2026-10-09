@@ -6,6 +6,9 @@ import type { RunExecution, Scenario } from '../interview-practice/types';
 import { blockExecutionAdmission, executionAdmissionOpen } from './operations';
 import type { SessionService } from './session-service';
 import { getService } from './application';
+import { digest } from '../interview-practice/domain';
+
+class AdmittedInputMismatch extends Error {}
 
 async function executeAdmittedSnapshot(scenario: Scenario, files: Record<string, string>, signal: AbortSignal): Promise<RunExecution> {
   if (!await executionAdmissionOpen()) return {
@@ -29,15 +32,23 @@ export async function processOneJob(service: SessionService, workerId = `worker-
   const heartbeat = setInterval(() => {
     service.heartbeatJob(claim).then(valid => { if (!valid) controller.abort(); }).catch(() => controller.abort());
   }, 15_000);
+  let externalWorkStarted = false;
   try {
     const session = await service.exportSession(claim.job.ownerId, claim.job.sessionId);
     const scenario = getScenario(session.scenarioId, session.scenarioVersion);
     const snapshot = session.snapshots.find(s => s.id === claim.job.snapshotId);
-    if (!scenario || !snapshot) throw new Error('admitted_input_missing');
+    // Verify the exact admitted private package and immutable snapshot before
+    // execution or inference. Completion validation alone is too late to avoid
+    // spending on a replaced same-version package or executing changed checks.
+    if (!scenario || !snapshot || digest(scenario) !== session.scenarioDigest || digest(snapshot.files) !== snapshot.sha256
+      || (claim.job.kind === 'run' && (claim.job.input.testSuiteDigest !== digest(scenario.tests) || digest(claim.job.input.runtime) !== digest(scenario.runtime)))) {
+      throw new AdmittedInputMismatch();
+    }
     session.files = structuredClone(snapshot.files);
     // Assistant inputs must refer to the admitted snapshot even if autosave advanced meanwhile.
     if (claim.job.kind === 'assistant') session.snapshots = session.snapshots.filter(s => s.sequence <= snapshot.sequence);
     const signal = controller.signal;
+    externalWorkStarted = true;
     const result = claim.job.kind === 'run'
       ? { kind: 'run' as const, run: await executeAdmittedSnapshot(scenario, snapshot.files, signal), actualUsd: 0 }
       : claim.job.kind === 'interviewer' ? (claim.job.input.forceAuthored ? { kind: 'interviewer' as const, proposal: authoredQuestion(scenario, session), model: 'authored', actualUsd: 0 } : await interview(scenario, session, signal))
@@ -45,8 +56,10 @@ export async function processOneJob(service: SessionService, workerId = `worker-
       : claim.job.input.forceAuthored ? { kind: 'coach' as const, report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 } : await coach(scenario, session, signal);
     await service.completeJob(claim, result);
   } catch (error) {
-    const definitelyNotCalled = error instanceof ProviderFailure && !error.mayHaveBilled;
-    await service.failJob(claim, error instanceof ProviderFailure && error.category === 'privacy_input'
+    const definitelyNotCalled = !externalWorkStarted || error instanceof ProviderFailure && !error.mayHaveBilled;
+    await service.failJob(claim, error instanceof AdmittedInputMismatch
+      ? 'The admitted scenario or snapshot no longer matches its saved identity. No execution or inference started. Restore the original package before retrying.'
+      : error instanceof ProviderFailure && error.category === 'privacy_input'
       ? 'Remove credential-like values from the workspace before requesting a complete AI file edit. Your files are saved and were not sent to the model.'
       : controller.signal.aborted
       ? 'Operation interrupted or cancelled. The acknowledged attempt remains available.'

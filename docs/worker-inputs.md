@@ -1,0 +1,9 @@
+# Admitted worker inputs
+
+A job is claimed with a lease and fencing identity, then its owner's saved attempt and admitted snapshot are read. Before code execution or model inference, the worker verifies the complete authored scenario digest against the session's original digest, including protected test source, reference files, and runtime policy. It verifies the snapshot's file digest and, for execution, the admitted test-suite digest and runtime configuration. An unavailable or replaced same-version package must be restored; it cannot silently change the attempt's task, tests, or model context.
+
+A mismatch records a safe failed job, starts no runner/provider work, and settles that claim's reservation at zero. A storage/input failure before external work likewise cannot have billed this claim. A prior interrupted claim's uncertain reservation remains separate and held. Once external work may have started, existing provider usage/uncertainty rules apply. Completion still validates the scenario, current claim, evidence, and result; the early check supplements those checks rather than replacing them.
+
+The heartbeat stops when the claim is fenced, cancelled, or erased. A late result cannot recreate deleted state. Authoring a new package requires a new version and reviewed content; changing an existing version blocks saved attempts until its exact original package is restored.
+
+`tests/worker-admission.test.ts` checks private test/reference/runtime drift, missing packages, corrupted snapshots/admitted execution metadata, no external call or fabricated observation on rejection, zero-cost release, and unchanged execution. These tests use synthetic runner/provider spies. Real isolated execution remains the separate CI and deployment qualification described in `docs/execution.md`.
