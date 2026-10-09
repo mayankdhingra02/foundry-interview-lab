@@ -1,0 +1,7 @@
+.retention-disclosure { margin-top:8px; }
+.retention-disclosure > p { max-width:90ch; }
+.retention-periods { margin:0 0 24px; }
+.retention-periods > div { display:grid; grid-template-columns:minmax(180px, 1fr) minmax(0, 3fr); gap:16px 24px; padding:14px 0; border-bottom:1px solid var(--line); font-size:13px; }
+.retention-periods dt { font-weight:600; }
+.retention-periods dd { margin:0; }
+@media(max-width:720px) { .retention-periods > div { grid-template-columns:1fr; gap:5px; } }
