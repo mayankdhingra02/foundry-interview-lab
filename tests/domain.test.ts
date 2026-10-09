@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { digest, toPublicScenario } from '../lib/interview-practice/domain';
-import { validateReport } from '../lib/interview-practice/evidence';
+import { buildEvidence, freezeEvidence, validateReport } from '../lib/interview-practice/evidence';
 import type { CoachOutput, Scenario } from '../lib/interview-practice/types';
 import { FilePracticeStore, MemoryPracticeStore } from '../lib/server/store';
 import { SessionService } from '../lib/server/session-service';
@@ -100,6 +100,31 @@ describe('deterministic session ownership and mutation contracts', () => {
     await service.requestRun('owner-a', session.id, mutation(session.revision)); const claim = await service.claimJob('worker');
     await expect(service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 1, tests: [{ id: 'invented', title: 'Invented', status: 'passed' }] } })).rejects.toMatchObject({ code: 'invalid' });
     expect((await service.getSession('owner-a', session.id)).runs).toHaveLength(0);
+  });
+  it('binds newly frozen test facts to the actual runtime without rewriting an existing manifest', async () => {
+    const service = serviceFor(), session = await create(service);
+    await service.requestRun('owner-a', session.id, mutation(session.revision));
+    const claim = await service.claimJob('worker');
+    await service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }] } });
+    const stored = await service.exportSession('owner-a', session.id);
+    const manifest = freezeEvidence(stored, '2026-10-09T12:00:00.000Z');
+    const fact = manifest.items.find(item => item.kind === 'test')!;
+    expect(JSON.parse(fact.content)).toMatchObject({ runtimeDigest: fixtureRuntimeId, snapshotSha256: stored.runs[0].snapshotSha256, testSuiteDigest: stored.runs[0].testSuiteDigest });
+    expect(fact.sha256).not.toBe(buildEvidence({ ...stored, runs: stored.runs.map(run => ({ ...run, runtimeDigest: `sha256:${'b'.repeat(64)}` })) }).find(item => item.kind === 'test')!.sha256);
+    stored.frozenEvidence = structuredClone(manifest);
+    const frozenBefore = JSON.stringify(stored.frozenEvidence);
+    stored.runs[0].runtimeDigest = `sha256:${'b'.repeat(64)}`;
+    buildEvidence(stored);
+    expect(JSON.stringify(stored.frozenEvidence)).toBe(frozenBefore);
+    expect(manifest.digest).toBe(digest(manifest.items));
+  });
+  it('keeps historical missing runtime identity unknown instead of assigning the current image', async () => {
+    const service = serviceFor(), session = await create(service);
+    const stored = await service.exportSession('owner-a', session.id);
+    stored.runs.push({ id: 'historical-run', jobId: 'historical-job', snapshotId: stored.snapshots[0].id, snapshotSha256: stored.snapshots[0].sha256, testSuiteDigest: digest(scenario.tests), createdAt: stored.createdAt, status: 'completed', command: 'historical fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }] });
+    const fact = buildEvidence(stored).find(item => item.kind === 'test')!;
+    expect(JSON.parse(fact.content).runtimeDigest).toBeNull();
+    expect(fact.content).not.toContain(fixtureRuntimeId);
   });
   it('retains a completed check when a later check times out without claiming global success', async () => {
     const service = serviceFor(), session = await create(service);
