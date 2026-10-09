@@ -6,11 +6,12 @@ Foundry Interview Lab is an interview preparation product within Engineering Fou
 
 ## Current status
 
-The application is implemented in a stack of focused, unmerged [pull requests](https://github.com/mayankdhingra02/foundry-interview-lab/pulls). `main` contains the initial planning baseline until those changes are reviewed and merged. See [delivery status](docs/delivery-status.md) for capability coverage, qualification evidence, and remaining release gates. The application has not been publicly deployed.
+The core practice workflow is implemented in a stack of focused, unmerged [pull requests](https://github.com/mayankdhingra02/foundry-interview-lab/pulls). Additional design requirements and release evidence remain open. `main` contains the initial planning baseline until changes are reviewed and merged. See [delivery status](docs/delivery-status.md) for recorded checks and [the design acceptance audit](docs/design-acceptance.md) for remaining engineering and qualification work. The application has not been publicly deployed.
 
 ## Documentation
 
 - [Delivery status and release gates](docs/delivery-status.md).
+- [Design acceptance audit and remaining engineering](docs/design-acceptance.md).
 - [Pull request dependency/review order](docs/pr-stack.md).
 - [Product roadmap and technical design](docs/design.md) — canonical, version-controlled planning document.
 - [Formatted Word document](docs/Engineering_Foundry_AI_Interview_Practice_Design.docx) — downloadable edition of the initial design.
@@ -23,14 +24,16 @@ The design distinguishes source behavior observed on October 9, 2026 from propos
 
 ## Implemented practice workflow
 
-- Five original Python repository exercises with reference solutions, public/protected checks, rubrics, hints, probes, and drills; human content approval remains pending.
-- A bounded coding workspace with saved files, test execution, edit previews, and safe undo that preserves assistance history.
+- Five preserved Python benchmark exercises plus three distinct level drafts with prerequisites, public/protected checks, rubrics, hints, probes and drills; calibration/content approval remain pending.
+- A bounded coding workspace with saved files, separate learner/authored check runs, edit previews and safe undo that preserves assistance history.
 - Separate AI interviewer, coding assistant, and post-interview coach roles.
 - Adaptive text discussion grounded in the learner's actual code and answers.
 - Feedback linked to code snapshots, test results, and transcript evidence.
 - Saved attempts, resume and recovery, export/deletion, spending limits, provisional progression, and bounded study plans.
 - Permissioned support requests and independently reviewed report corrections that preserve original evidence.
-- Optional press-to-talk speech and payments, disabled until configured and separately qualified.
+- Typed advisory timing/written-participation choices, explicit extensions and optional press-to-talk speech/payments behind qualification gates.
+- Default-off bounded telemetry, opaque operational support references and explicit failed-sign-in recovery.
+- Private corpus/capture preparation, separately bound model recording and blind human-review tooling; real acceptance data and independent judgments remain pending.
 
 Finish coding freezes the code for discussion. Final submit freezes the complete evidence set and starts coaching report generation.
 
@@ -50,7 +53,7 @@ npm run dev
 
 Open `http://127.0.0.1:3000`. Local identity uses a signed development cookie and file storage; it is disabled in production. Keep private attempts, exports and credentials outside Git. No model key is needed to explore the text workflow. Reports disclose when no assessment was produced.
 
-For real execution, provision the reviewed Python image and set its exact `PYTHON_IMAGE_ID` before practice with a healthy Docker installation and a dedicated trusted execution host. Learner runs use cached images and never execute on the application host. See [execution](docs/execution.md). A configured adapter is not a successful run.
+For real execution, provision the reviewed Python image and set its exact `PYTHON_IMAGE_ID` before practice with a healthy Docker installation. Learner code runs inside constrained containers using cached images. Hosted deployments must place the worker and Docker daemon on a dedicated execution host; the adapter alone does not enforce physical host separation. See [execution](docs/execution.md). A configured adapter is not a successful run.
 
 `npm run worker` starts the durable worker using the same environment. Hosted operation requires verified Supabase identity, ordered PostgreSQL migrations, separate web/worker configuration, and the checks in [deployment](deploy/README.md) and [operations](docs/operations.md).
 
@@ -63,7 +66,7 @@ PLAYWRIGHT_BASE_URL=http://127.0.0.1:3000 npm run test:e2e
 
 Start the development server separately for browser tests. Playwright uses installed Google Chrome by default; [development setup](docs/development.md) describes the Chromium alternative. Default tests exclude explicitly enabled container/database integrations. [CI](docs/ci.md) also requires real isolated execution, PostgreSQL owner/transaction checks, bounded load and restore checks, browser recovery, deployment image builds, and container startup. Review the exact commit's results; an earlier passing run does not qualify later changes.
 
-Implementation details and release limitations are documented in [AI](docs/ai.md), [API](docs/api.md), [content review](docs/content-review.md), [persistence](docs/persistence.md), [quota accounting](docs/quotas.md), [retention](docs/retention.md), [speech](docs/voice.md), [billing](docs/billing.md), [support/corrections](docs/review.md), [progression](docs/progression.md), [rollout](docs/rollout.md), and [evaluation](docs/evaluation.md).
+Implementation details and release limitations are documented in [AI](docs/ai.md), [API](docs/api.md), [content review](docs/content-review.md), [persistence](docs/persistence.md), [quota accounting](docs/quotas.md), [retention](docs/retention.md), [speech](docs/voice.md), [billing](docs/billing.md), [support/corrections](docs/review.md), [progression](docs/progression.md), [rollout](docs/rollout.md), and [evaluation](docs/evaluation.md), [curriculum](docs/curriculum.md), [learner checks](docs/learner-checks.md), [measurement](docs/measurement.md), [private model review](docs/private-model-evaluation.md), and [dependency assessment](docs/dependency-audit.md).
 
 ## Original planning estimates
 
