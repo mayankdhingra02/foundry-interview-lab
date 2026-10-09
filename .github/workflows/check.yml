@@ -46,14 +46,9 @@ jobs:
       # Deliberate CI image provisioning; learner execution never pulls images.
       - name: Provision reviewed qualification images
         run: |
-          provision() {
-            local source="$1" target="$2"
-            if ! docker image inspect "$source" > /dev/null 2>&1; then docker pull "$source"; fi
-            docker image tag "$source" "$target"
-            docker image inspect --format '{{json .RepoDigests}}' "$source"
-          }
-          provision "$CI_PYTHON_IMAGE" python:3.11-slim
-          provision "$CI_POSTGRES_IMAGE" postgres:16-alpine
+          source .github/scripts/provision-images.sh
+          provision_reviewed_image "$CI_PYTHON_IMAGE" python:3.11-slim
+          provision_reviewed_image "$CI_POSTGRES_IMAGE" postgres:16-alpine
           image_id="$(docker image inspect --format '{{.Id}}' "$CI_PYTHON_IMAGE")"
           [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
           echo "PYTHON_IMAGE_ID=$image_id" >> "$GITHUB_ENV"
@@ -93,9 +88,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Provision reviewed browser runtime
         run: |
-          if ! docker image inspect "$CI_PYTHON_IMAGE" > /dev/null 2>&1; then docker pull "$CI_PYTHON_IMAGE"; fi
-          docker image tag "$CI_PYTHON_IMAGE" python:3.11-slim
-          docker image inspect --format '{{json .RepoDigests}}' "$CI_PYTHON_IMAGE"
+          source .github/scripts/provision-images.sh
+          provision_reviewed_image "$CI_PYTHON_IMAGE" python:3.11-slim
           image_id="$(docker image inspect --format '{{.Id}}' "$CI_PYTHON_IMAGE")"
           [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
           echo "PYTHON_IMAGE_ID=$image_id" >> "$GITHUB_ENV"
@@ -131,12 +125,10 @@ jobs:
       - run: npm ci
       - name: Provision reviewed deployment bases
         run: |
-          for source in "$CI_NODE_IMAGE" "$CI_DOCKER_CLI_IMAGE"; do
-            if ! docker image inspect "$source" > /dev/null 2>&1; then docker pull "$source"; fi
-            docker image inspect --format '{{json .RepoDigests}}' "$source"
-          done
-          if ! docker image inspect "$CI_PYTHON_IMAGE" > /dev/null 2>&1; then docker pull "$CI_PYTHON_IMAGE"; fi
-          docker image tag "$CI_PYTHON_IMAGE" python:3.11-slim
+          source .github/scripts/provision-images.sh
+          provision_reviewed_image "$CI_NODE_IMAGE"
+          provision_reviewed_image "$CI_DOCKER_CLI_IMAGE"
+          provision_reviewed_image "$CI_PYTHON_IMAGE" python:3.11-slim
           image_id="$(docker image inspect --format '{{.Id}}' "$CI_PYTHON_IMAGE")"
           [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
           echo "PYTHON_IMAGE_ID=$image_id" >> "$GITHUB_ENV"
