@@ -1,0 +1,108 @@
+{
+  "benchmarkVersion": "foundry-regression-2026-10-09-v1",
+  "provenance": "human-review-required",
+  "cases": [
+    {
+      "caseId": "money-reference",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "money-starter",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "compatibility-reference",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "compatibility-starter",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "invoice-reference",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "invoice-starter",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "inventory-reference",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "inventory-starter",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "rollup-reference",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "rollup-starter",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "sparse-reference",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "confident-wrong",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "injection-dialogue",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "unexecuted-reference",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "stale-run",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "rejected-correct-edit",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "accepted-bad-edit",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    }
+  ]
+}
