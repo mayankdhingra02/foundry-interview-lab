@@ -1,0 +1,178 @@
+{
+  "id": "event-rollup",
+  "version": "1.0.0",
+  "title": "A midnight reporting discrepancy",
+  "summary": "Explore an unfamiliar ingestion pipeline and fix daily totals with time zones, refunds, and repeated deliveries.",
+  "durationMinutes": 50,
+  "level": "Intermediate",
+  "tags": [
+    "Repository comprehension",
+    "Time zones",
+    "Data pipelines",
+    "Deduplication"
+  ],
+  "language": "python",
+  "starterFiles": [
+    "README.md",
+    "parser.py",
+    "aggregation.py",
+    "pipeline.py"
+  ],
+  "referenceFiles": [
+    "README.md",
+    "parser.py",
+    "aggregation.py",
+    "pipeline.py"
+  ],
+  "stages": [
+    {
+      "id": "understand",
+      "title": "Understand the contract",
+      "brief": "Explore an unfamiliar ingestion pipeline and fix daily totals with time zones, refunds, and repeated deliveries. Preserve the documented public interface. Use only Python 3.11 standard-library modules.",
+      "requirements": [
+        "Preserve build_report(lines), read_events(lines), and aggregate(events). build_report accepts a one-pass iterable of JSON strings; blank lines are ignored.",
+        "Each nonblank line is an object with nonempty string event_id/customer_id, kind purchase or refund, positive integer amount_cents (not bool), and an ISO 8601 occurred_at with an explicit timezone. Extra fields may be ignored.",
+        "Normalize occurred_at to UTC before assigning its calendar day. Purchases add cents; refunds subtract cents. Refund-only and net-zero rows are retained.",
+        "event_id is globally unique within one report. An identical semantic retry counts once; a conflicting retry raises ValueError. Equivalent timestamps with different offsets represent the same instant.",
+        "Return dictionaries with customer_id, day (YYYY-MM-DD in UTC), and net_cents, sorted by customer_id then day. Do not mutate caller inputs.",
+        "Malformed records raise ValueError whose message includes the original physical line number. Conflicting IDs raise ValueError without a required line number. No partial report is returned on failure."
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Implement the change",
+      "brief": "Make the smallest coherent change that satisfies the disclosed contract.",
+      "requirements": [
+        "Preserve public interfaces and existing valid behavior.",
+        "Explain any deliberate trade-off."
+      ]
+    },
+    {
+      "id": "verify",
+      "title": "Verify the behavior",
+      "brief": "Run checks and inspect failures before finishing.",
+      "requirements": [
+        "Run public checks and add a targeted boundary or regression check.",
+        "Identify behavior that your tests do not establish."
+      ]
+    },
+    {
+      "id": "debrief",
+      "title": "Defend your decisions",
+      "brief": "Explain the submitted code and its remaining limits.",
+      "requirements": [
+        "Use concrete code or test evidence.",
+        "Describe one alternative and its trade-off."
+      ]
+    }
+  ],
+  "rubric": [
+    {
+      "id": "rollup-comprehension",
+      "name": "Repository comprehension",
+      "description": "Trace ingestion, normalization, aggregation, and output contracts.",
+      "anchors": {
+        "strong": "Explains module responsibilities and puts validation/time normalization and aggregation logic in appropriate boundaries.",
+        "developing": "Fixes one output symptom but misses an ingestion or aggregation boundary.",
+        "needsWork": "Changes output without understanding where timestamps and amounts enter the pipeline."
+      }
+    },
+    {
+      "id": "rollup-correctness",
+      "name": "Event semantics",
+      "description": "Honor UTC days, refund signs, deduplication, and conflict behavior.",
+      "anchors": {
+        "strong": "Normalizes timezone-aware events, compares semantic retry payloads, and preserves signed and zero totals.",
+        "developing": "Gets basic totals right but misses a retry, timezone, or zero-total case.",
+        "needsWork": "Counts retries/refunds incorrectly or groups by the sender-local calendar date."
+      }
+    },
+    {
+      "id": "rollup-verification",
+      "name": "Diagnostic evidence",
+      "description": "Verify failure messages and representative event sequences.",
+      "anchors": {
+        "strong": "Tests cross-midnight offsets, duplicate/conflicting events, invalid lines, and sorted outputs.",
+        "developing": "Covers normal purchases but little failure or boundary behavior.",
+        "needsWork": "Only checks a simple positive total and assumes the pipeline is correct."
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "event-rollup-probe-1",
+      "stageId": "debrief",
+      "competencyId": "rollup-comprehension",
+      "question": "Which module owns input normalization, and how does that decision affect the aggregation code?"
+    },
+    {
+      "id": "event-rollup-probe-2",
+      "stageId": "debrief",
+      "competencyId": "rollup-correctness",
+      "question": "When are two differently written timestamps the same retry, and when is a duplicate a conflict?"
+    },
+    {
+      "id": "event-rollup-probe-3",
+      "stageId": "debrief",
+      "competencyId": "rollup-verification",
+      "question": "Which event sequence did you use to distinguish local midnight from the UTC reporting day?"
+    }
+  ],
+  "hints": [
+    "Trace build_report through parser.py and aggregation.py. Locate where an event becomes a calendar day and where its sign is chosen.",
+    "Parse and validate input once, normalize timestamps to UTC, and deduplicate using event identity plus the semantic payload.",
+    "Use datetime.astimezone(timezone.utc) before taking date(). Track seen event IDs and compare customer, kind, amount, and normalized instant. Add physical line numbers during parsing."
+  ],
+  "tests": [
+    {
+      "id": "event-rollup-public",
+      "title": "Public contract checks",
+      "file": "tests/test_public.py",
+      "visible": true,
+      "timeoutSeconds": 12
+    },
+    {
+      "id": "event-rollup-protected",
+      "title": "Protected contract and edge checks",
+      "file": "tests/test_protected.py",
+      "visible": false,
+      "timeoutSeconds": 20
+    }
+  ],
+  "drills": [
+    {
+      "id": "event-rollup-drill",
+      "title": "Trace an event across boundaries",
+      "competencyId": "rollup-comprehension",
+      "lesson": "Pipeline contracts and UTC normalization",
+      "exercise": "Construct two offset timestamps for one instant near midnight. Show their UTC bucket, then add a refund and a duplicate and calculate the expected net total."
+    },
+    {
+      "id": "event-rollup-drill-2",
+      "title": "Compare semantic retries",
+      "competencyId": "rollup-correctness",
+      "lesson": "Event identity and normalized payloads",
+      "exercise": "Construct two JSON records with differently written offsets for the same instant. Count them once; then change the amount or customer under the same ID and verify rejection."
+    },
+    {
+      "id": "event-rollup-drill-3",
+      "title": "Preserve diagnostic context",
+      "competencyId": "rollup-verification",
+      "lesson": "Data-pipeline boundary testing",
+      "exercise": "Place a blank line before a valid event and then malformed JSON. Assert the physical error line. Add a refund-only day, a zero-net day, and out-of-order customers to verify the output contract."
+    }
+  ],
+  "rights": "Original Engineering Foundry preparation content; retained as proprietary project material. No claim of affiliation with an interview vendor.",
+  "runtime": {
+    "image": "python:3.11-slim",
+    "timeoutSeconds": 25,
+    "memoryMb": 256
+  },
+  "reviewStatus": {
+    "automatedReference": "passed on Python 3.10.13 and 3.11.12; pinned container qualification pending",
+    "expertReview": "pending",
+    "learnerPilot": "pending",
+    "starterDivergence": "confirmed intended contract failure"
+  },
+  "expectedStarterFailures": "The starter groups by local dates, adds refunds, double-counts retries, and lacks consistent validation diagnostics."
+}

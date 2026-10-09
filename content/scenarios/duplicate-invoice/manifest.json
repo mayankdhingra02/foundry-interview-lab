@@ -1,0 +1,178 @@
+{
+  "id": "duplicate-invoice",
+  "version": "1.0.0",
+  "title": "Duplicate Invoice Incident",
+  "summary": "Make payment webhook retries safe across restarts without merging distinct merchants or changing a stored invoice.",
+  "durationMinutes": 45,
+  "level": "Intermediate",
+  "tags": [
+    "Idempotency",
+    "SQLite",
+    "Durability",
+    "Validation"
+  ],
+  "language": "python",
+  "starterFiles": [
+    "README.md",
+    "models.py",
+    "store.py",
+    "service.py"
+  ],
+  "referenceFiles": [
+    "README.md",
+    "models.py",
+    "store.py",
+    "service.py"
+  ],
+  "stages": [
+    {
+      "id": "understand",
+      "title": "Understand the contract",
+      "brief": "Make payment webhook retries safe across restarts without merging distinct merchants or changing a stored invoice. Preserve the documented public interface. Use only Python 3.11 standard-library modules.",
+      "requirements": [
+        "Preserve PaymentEvent, InvoiceStore(path=\":memory:\"), store.insert(event), store.all(), store.close(), and create_invoice(store, event).",
+        "Identify a delivery by (merchant_id, event_id). An identical retry returns the original invoice ID and creates no additional row.",
+        "The same event_id may be used by two merchants; different event_id values are distinct deliveries.",
+        "Reusing the same delivery key with a different amount raises ValueError and preserves the original row. A later unrelated delivery must still work.",
+        "Reject non-string or whitespace-only identifiers and non-positive or non-integer amounts with ValueError before writing; booleans are not valid amounts.",
+        "Retries must remain safe after closing and reopening the same database. A process-local cache alone is insufficient. No migration of pre-existing malformed databases is required."
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Implement the change",
+      "brief": "Make the smallest coherent change that satisfies the disclosed contract.",
+      "requirements": [
+        "Preserve public interfaces and existing valid behavior.",
+        "Explain any deliberate trade-off."
+      ]
+    },
+    {
+      "id": "verify",
+      "title": "Verify the behavior",
+      "brief": "Run checks and inspect failures before finishing.",
+      "requirements": [
+        "Run public checks and add a targeted boundary or regression check.",
+        "Identify behavior that your tests do not establish."
+      ]
+    },
+    {
+      "id": "debrief",
+      "title": "Defend your decisions",
+      "brief": "Explain the submitted code and its remaining limits.",
+      "requirements": [
+        "Use concrete code or test evidence.",
+        "Describe one alternative and its trade-off."
+      ]
+    }
+  ],
+  "rubric": [
+    {
+      "id": "invoice-identity",
+      "name": "Delivery identity",
+      "description": "Choose a correctly scoped, persistent delivery identity.",
+      "anchors": {
+        "strong": "Uses merchant plus event identity and persists it; explains restart behavior.",
+        "developing": "Handles identical retries but misses scoping or restart durability.",
+        "needsWork": "Uses amount, a global event ID, or an in-memory set as the only identity."
+      }
+    },
+    {
+      "id": "invoice-conflicts",
+      "name": "Conflict and validation semantics",
+      "description": "Preserve the original invoice and reject invalid inputs.",
+      "anchors": {
+        "strong": "Compares stored payload on retry and leaves the database usable after rejection.",
+        "developing": "Rejects some conflicts but misses an invalid type or rollback condition.",
+        "needsWork": "Silently overwrites the amount, ignores conflicts, or writes invalid inputs."
+      }
+    },
+    {
+      "id": "invoice-verification",
+      "name": "Verification",
+      "description": "Test retries, distinct deliveries, and failure recovery.",
+      "anchors": {
+        "strong": "Shows retry, merchant scope, restart, and conflict recovery evidence.",
+        "developing": "Tests sequential retries alone.",
+        "needsWork": "Relies on a single successful insert or an unverified cache assumption."
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "duplicate-invoice-probe-1",
+      "stageId": "debrief",
+      "competencyId": "invoice-identity",
+      "question": "What exactly identifies a delivery, and why is the merchant part of that key?"
+    },
+    {
+      "id": "duplicate-invoice-probe-2",
+      "stageId": "debrief",
+      "competencyId": "invoice-conflicts",
+      "question": "What happens when a sender reuses the key with a different amount?"
+    },
+    {
+      "id": "duplicate-invoice-probe-3",
+      "stageId": "debrief",
+      "competencyId": "invoice-verification",
+      "question": "Which part of the solution survives a process restart, and how did you verify it?"
+    }
+  ],
+  "hints": [
+    "Trace two identical calls to store.insert and inspect the fields that identify their persisted delivery.",
+    "The delivery key needs a merchant scope, and a retry must compare its amount with the original.",
+    "A database composite uniqueness constraint can establish identity. On conflict, read the existing invoice, compare the amount, and return its ID; validate before writing."
+  ],
+  "tests": [
+    {
+      "id": "duplicate-invoice-public",
+      "title": "Public contract checks",
+      "file": "tests/test_public.py",
+      "visible": true,
+      "timeoutSeconds": 12
+    },
+    {
+      "id": "duplicate-invoice-protected",
+      "title": "Protected contract and edge checks",
+      "file": "tests/test_protected.py",
+      "visible": false,
+      "timeoutSeconds": 20
+    }
+  ],
+  "drills": [
+    {
+      "id": "duplicate-invoice-drill",
+      "title": "Scope a retry key",
+      "competencyId": "invoice-identity",
+      "lesson": "At-least-once delivery and durable identity",
+      "exercise": "Model two tenants sending the same event ID. Specify identical retry and conflicting-payload behavior, then test restart recovery."
+    },
+    {
+      "id": "duplicate-invoice-drill-2",
+      "title": "Reject a conflicting retry safely",
+      "competencyId": "invoice-conflicts",
+      "lesson": "Conflict semantics and transaction recovery",
+      "exercise": "Store one event, retry it with a changed amount, then submit a distinct event on the same connection. Verify the original record and demonstrate that rejection did not poison subsequent work."
+    },
+    {
+      "id": "duplicate-invoice-drill-3",
+      "title": "Verify identity after restart",
+      "competencyId": "invoice-verification",
+      "lesson": "Durable retry testing",
+      "exercise": "Build a temporary SQLite database, insert an event, close the connection, and reopen it. Retry the event and verify both ID equality and row count; then try another merchant with the same event ID."
+    }
+  ],
+  "rights": "Original Engineering Foundry preparation content; retained as proprietary project material. No claim of affiliation with an interview vendor.",
+  "runtime": {
+    "image": "python:3.11-slim",
+    "timeoutSeconds": 25,
+    "memoryMb": 256
+  },
+  "reviewStatus": {
+    "automatedReference": "passed on Python 3.10.13 and 3.11.12; pinned container qualification pending",
+    "expertReview": "pending",
+    "learnerPilot": "pending",
+    "starterDivergence": "confirmed intended contract failure"
+  },
+  "expectedStarterFailures": "The starter always inserts and accepts invalid payloads."
+}
