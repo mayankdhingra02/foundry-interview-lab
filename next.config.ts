@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
       { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
       { key: 'X-Frame-Options', value: 'DENY' },
       { key: 'Permissions-Policy', value: 'camera=(), microphone=(self)' }
-    ] }];
+    ] }, { source: '/auth/callback', headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }] }];
   }
 };
 export default nextConfig;
