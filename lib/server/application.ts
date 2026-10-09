@@ -6,6 +6,7 @@ import { HttpError } from './http';
 import { capabilities } from './config';
 import { inferenceReservations } from '../ai/policy';
 import { getBillingService } from '../billing/application';
+import { rolloutAdmissionPolicy } from './rollout';
 
 let service: Promise<SessionService> | undefined;
 export function getService(): Promise<SessionService> {
@@ -19,15 +20,17 @@ export function getService(): Promise<SessionService> {
       const path = process.env.PRACTICE_DATA_PATH || './data/practice.json';
       store = new FilePracticeStore(dirname(resolve(path)));
     }
-    const ai = capabilities().ai;
+    const caps = capabilities();
+    const reservations = caps.ai ? inferenceReservations() : { interviewer: 0, coach: 0, assistant: 0.08 };
+    if (!caps.coaching) reservations.coach = 0;
     const billing = getBillingService();
     return new SessionService(store, getScenario, {
       maxSessionUsd: Number(process.env.MAX_SESSION_USD || 1),
       maxDailyUsd: Number(process.env.MAX_DAILY_USER_USD || 5),
       maxMonthlyUsd: Number(process.env.MAX_MONTHLY_USER_USD || 50),
       maxGlobalDailyUsd: Number(process.env.MAX_GLOBAL_DAILY_USD || 50),
-      reservations: ai ? inferenceReservations() : { interviewer: 0, coach: 0, assistant: 0.08 },
-      admissionPolicy: billing && 'currentTransactionClient' in store ? billing.admissionPolicy(store) : undefined
+      reservations,
+      admissionPolicy: rolloutAdmissionPolicy(billing && 'currentTransactionClient' in store ? billing.admissionPolicy(store) : undefined)
     });
   })();
   return service.catch(error => { service = undefined; throw error; });
