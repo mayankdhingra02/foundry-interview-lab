@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { EventValidationError, parsePracticeEvent, type EventPayload } from './events';
 import type { EventType, PracticeEvent, PublicScenario, Scenario, Session, Snapshot } from './types';
 
 export class DomainError extends Error {
@@ -56,8 +57,14 @@ export function toPublicScenario(scenario: Scenario): PublicScenario {
   void _references; void _probes; void _hints;
   return { ...publicFields, tests: tests.map(({ source, ...metadata }) => metadata.visible ? { ...metadata, source } : metadata) };
 }
-export function appendEvent(session: Session, type: EventType, payload: Record<string, unknown>, requestId: string, now: string, source: PracticeEvent['source'] = 'server') {
-  const event: PracticeEvent = { id: randomUUID(), sessionId: session.id, sequence: session.events.length + 1, schemaVersion: 1, type, payload, requestId, source, occurredAt: now, recordedAt: now };
+export function appendEvent<T extends EventType>(session: Session, type: T, payload: EventPayload<T>, requestId: string, now: string, source: PracticeEvent['source'] = 'server'): PracticeEvent {
+  let event: PracticeEvent;
+  try {
+    event = parsePracticeEvent({ id: randomUUID(), sessionId: session.id, sequence: session.events.length + 1, schemaVersion: 1, type, payload, requestId, source, occurredAt: now, recordedAt: now });
+  } catch (error) {
+    if (error instanceof EventValidationError) throw new DomainError('invalid', error.message);
+    throw error;
+  }
   session.events.push(event); session.revision += 1; session.updatedAt = now;
   return event;
 }
