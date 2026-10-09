@@ -7,12 +7,13 @@ import type { Actor } from './auth';
 import { HttpError } from './http';
 import { SessionService, sessionView, type TrustedSupportGuard } from './session-service';
 import type { PracticeStore } from './store';
+import { admissionLimits, admissionLimitsFromEnvironment, assertMutationAdmission, assertMutationGrowth, captureMutationGrowth, mutationAdmissionMetadata, type AdmissionLimits, type MutationLane } from '../interview-practice/admission';
 import { assertRequestNotErased } from './deleted-requests';
 
 export type ReviewActor = Pick<Actor, 'id' | 'local'>;
 export type CreateReviewInput = { requestId: string; category: 'feedback' | 'technical'; reportId?: string; message: string; criterionIds?: string[]; inspectionConsent: boolean; supportActionsConsent: boolean };
 export type ReviewConsentInput = { requestId: string; expectedRevision: number; inspectionConsent: boolean; supportActionsConsent: boolean };
-export type ReviewOptions = { adminUserIds?: string[]; now?: () => Date; allowLocalAdmins?: boolean; practice?: SessionService };
+export type ReviewOptions = { adminUserIds?: string[]; now?: () => Date; allowLocalAdmins?: boolean; practice?: SessionService; admissionLimits?: Partial<AdmissionLimits> };
 export const emptyReviewDatabase = (): ReviewDatabase => ({ cases: {}, drafts: {}, decisions: {}, publications: {}, audits: [] });
 export function reviewAdminAllowed(actor: ReviewActor, ids = (process.env.ADMIN_USER_IDS || '').split(',').map(id => id.trim()).filter(Boolean), allowLocal = process.env.NODE_ENV !== 'production') { return ids.includes(actor.id) && (!actor.local || allowLocal); }
 const data = (db: PracticeDatabase) => db.reviews ??= emptyReviewDatabase();
@@ -24,8 +25,10 @@ export class ReviewService {
   private readonly now: () => Date;
   private readonly adminIds: string[];
   private readonly allowLocal: boolean;
+  private readonly limits: AdmissionLimits;
   constructor(readonly store: PracticeStore, private readonly resolveScenario: (id: string, version?: string) => Scenario | null, private readonly options: ReviewOptions = {}) {
     this.now = options.now ?? (() => new Date()); this.adminIds = options.adminUserIds ?? (process.env.ADMIN_USER_IDS || '').split(',').map(id => id.trim()).filter(Boolean); this.allowLocal = process.env.NODE_ENV !== 'production' && (options.allowLocalAdmins ?? true);
+    this.limits = admissionLimits(options.admissionLimits ?? admissionLimitsFromEnvironment(process.env));
   }
   allowed(actor: ReviewActor) { return reviewAdminAllowed(actor, this.adminIds, this.allowLocal); }
   private admin(actor: ReviewActor) { if (!this.allowed(actor)) throw new HttpError(403, 'staff_access_denied', 'This Foundry account does not have internal review access.'); }
@@ -40,15 +43,19 @@ export class ReviewService {
     const audit = { id: randomUUID(), actorId, action, purpose, createdAt: now, ...(item ? { ownerId: item.ownerId, sessionId: item.sessionId, caseId: item.id } : {}), ...(targetId ? { targetId } : {}) };
     data(db).audits.push(audit); return audit.id;
   }
-  private once(db: PracticeDatabase, ownerId: string, actorId: string, requestId: string, operation: string, payload: unknown, sessionId: string | undefined, apply: () => string) {
+  private once(db: PracticeDatabase, ownerId: string, actorId: string, requestId: string, operation: string, payload: unknown, sessionId: string | undefined, apply: () => string, learnerLane?: MutationLane) {
     assertRequestId(requestId);
     const id = `review_${digest({ actorId, requestId })}`, key = requestKey(ownerId, id), fingerprint = digest({ operation, payload, sessionId: sessionId ?? null });
     const existing = db.requests[key];
     if (existing) { if (existing.fingerprint !== fingerprint) throw new DomainError('conflict', 'This review request key was used for different input.'); return String(existing.result); }
     assertRequestNotErased(db, ownerId, id, fingerprint);
+    if (learnerLane && sessionId) ownedSession(db.sessions, ownerId, sessionId);
+    if (learnerLane) assertMutationAdmission(db, ownerId, operation, learnerLane, this.at(), this.limits);
+    const before = learnerLane ? captureMutationGrowth(db, ownerId) : undefined;
     const reference = apply();
+    if (learnerLane && before) assertMutationGrowth(db, ownerId, before, learnerLane, this.limits);
     // Cache only references, never private inspection output or unpublished draft contents.
-    db.requests[key] = { ownerId, requestId: id, fingerprint, result: reference, createdAt: this.at(), ...(sessionId ? { sessionId } : {}) }; return reference;
+    db.requests[key] = { ownerId, requestId: id, fingerprint, result: reference, createdAt: this.at(), ...(sessionId ? { sessionId } : {}), ...mutationAdmissionMetadata(learnerLane ?? 'staff') }; return reference;
   }
   async createCase(ownerId: string, sessionId: string, input: CreateReviewInput) {
     const message = boundedText(input.message, 'Support message', 4000);
@@ -65,7 +72,7 @@ export class ReviewService {
         if (Object.values(reviews.cases).filter(item => item.ownerId === ownerId && item.createdAt.slice(0, 10) === now.slice(0, 10)).length >= 10) throw new DomainError('quota', 'Daily support request limit reached.');
         const id = randomUUID(); reviews.cases[id] = { id, ownerId, sessionId, reportId: input.reportId ?? null, category: input.category, message, criterionIds, status: 'open', revision: 1, inspectionConsent: input.inspectionConsent, supportActionsConsent: input.supportActionsConsent, consentVersion: 'support-inspection-v1', consentExpiresAt: input.inspectionConsent || input.supportActionsConsent ? new Date(new Date(now).getTime() + 7 * 86_400_000).toISOString() : null, createdAt: now, updatedAt: now };
         this.audit(db, ownerId, 'case.created', 'Learner requested support; no research permission granted.', now, reviews.cases[id]); return id;
-      });
+      }, 'ordinary');
       return ownerView(reviews.cases[id]);
     });
   }
@@ -77,11 +84,13 @@ export class ReviewService {
     return this.store.transaction(db => {
       const item = this.reviewCase(db, caseId), now = this.at(); if (item.ownerId !== ownerId) throw new DomainError('not_found', 'Support reference not found.');
       if (typeof input.inspectionConsent !== 'boolean' || typeof input.supportActionsConsent !== 'boolean') throw new DomainError('invalid', 'Choose explicit permission settings.');
+      const onlyRevokes = !(!item.inspectionConsent && input.inspectionConsent) && !(!item.supportActionsConsent && input.supportActionsConsent)
+        && (item.inspectionConsent && !input.inspectionConsent || item.supportActionsConsent && !input.supportActionsConsent);
       this.once(db, ownerId, ownerId, input.requestId, 'review-consent', input, item.sessionId, () => {
         if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision !== item.revision) throw new DomainError('conflict', 'Support permissions changed. Refresh before updating them.');
         item.inspectionConsent = input.inspectionConsent; item.supportActionsConsent = input.supportActionsConsent; item.consentExpiresAt = input.inspectionConsent || input.supportActionsConsent ? new Date(new Date(now).getTime() + 7 * 86_400_000).toISOString() : null; item.revision++; item.updatedAt = now;
         this.audit(db, ownerId, 'consent.changed', 'Learner updated support-only permission.', now, item); return item.id;
-      }); return ownerView(item);
+      }, onlyRevokes ? 'recovery' : 'ordinary'); return ownerView(item);
     });
   }
   async listCases(actor: ReviewActor) {

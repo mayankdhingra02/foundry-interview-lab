@@ -2,6 +2,7 @@ import { appendEvent, assertActive, assertRequestId, assertRevision, digest, Dom
 import type { Mutation, SessionView } from '../interview-practice/types';
 import type { PracticeStore } from './store';
 import { sessionView } from './session-service';
+import { admissionLimits, admissionLimitsFromEnvironment, assertMutationAdmission, assertMutationGrowth, captureMutationGrowth, mutationAdmissionMetadata, type AdmissionLimits } from '../interview-practice/admission';
 import { assertRequestNotErased } from './deleted-requests';
 
 export type InteractionAction = 'working' | 'repeat' | 'clarify';
@@ -11,7 +12,8 @@ export type InteractionResult = { session: SessionView; response: string; questi
 
 /** Public-brief controls are deterministic. They never submit an answer or call a provider. */
 export class InteractionService {
-  constructor(private readonly store: PracticeStore, private readonly now = () => new Date()) {}
+  private readonly limits: AdmissionLimits;
+  constructor(private readonly store: PracticeStore, private readonly now = () => new Date(), limits: Partial<AdmissionLimits> = admissionLimitsFromEnvironment(process.env)) { this.limits = admissionLimits(limits); }
   async interact(ownerId: string, sessionId: string, input: InteractionInput): Promise<InteractionResult> {
     assertRequestId(input.requestId);
     if (!['working', 'repeat', 'clarify'].includes(input.action) ||
@@ -28,6 +30,9 @@ export class InteractionService {
       }
       assertRequestNotErased(db, ownerId, input.requestId, fingerprint);
       const session = ownedSession(db.sessions, ownerId, sessionId);
+      const now = this.now().toISOString();
+      assertMutationAdmission(db, ownerId, 'interview-interaction', 'ordinary', now, this.limits);
+      const before = captureMutationGrowth(db, ownerId);
       assertRevision(session, input.expectedRevision); assertActive(session);
       if (session.frozenEvidence) throw new DomainError('conflict', 'Final submission has closed interview controls.');
       if (session.events.filter(event => event.type === 'interview.interaction').length >= 100) throw new DomainError('quota', 'This attempt has reached its interview-control limit. Saved instructions and questions remain available.');
@@ -47,10 +52,10 @@ export class InteractionService {
         response = [session.scenario.summary, stage?.brief, ...(stage?.requirements ?? [])].filter(Boolean).join('\n\n');
         if (response.length > 5900) response = `${response.slice(0, 5900)}\n\nSee the Task panel for the remaining published requirements.`;
       }
-      const now = this.now().toISOString();
       appendEvent(session, 'interview.interaction', { action: input.action, response, ...(topic ? { topic } : {}), ...(questionId ? { questionId } : {}) }, input.requestId, now, 'learner');
+      assertMutationGrowth(db, ownerId, before, 'ordinary', this.limits);
       const result = { session: sessionView(session), response, ...(questionId ? { questionId } : {}) };
-      db.requests[key] = { ownerId, sessionId, requestId: input.requestId, fingerprint, createdAt: now, result: structuredClone(result) };
+      db.requests[key] = { ownerId, sessionId, requestId: input.requestId, fingerprint, createdAt: now, result: structuredClone(result), ...mutationAdmissionMetadata('ordinary') };
       return result;
     });
   }

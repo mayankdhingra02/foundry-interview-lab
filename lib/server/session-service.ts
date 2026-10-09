@@ -2,12 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { appendEvent, assertActive, assertCoding, assertRequestId, assertRevision, boundedText, createSnapshot, digest, DomainError, ownedSession, requestKey, selectedSnapshot, toPublicScenario, validateFiles } from '../interview-practice/domain';
 import { buildEvidence, freezeEvidence, validateInterviewProposal, validateReport } from '../interview-practice/evidence';
 import { budgetTotals, reservationBudgetAt } from '../interview-practice/quota';
+import { admissionLimits, assertJobAdmission, assertMutationAdmission, assertMutationGrowth, captureMutationGrowth, mutationAdmissionMetadata, mutationLane, type AdmissionLimits } from '../interview-practice/admission';
 import type { InferenceRecord, JobClaim, JobKind, JobResult, JobView, Mutation, PracticeDatabase, PracticeJob, Scenario, Session, SessionConfiguration, SessionView } from '../interview-practice/types';
 import type { PracticeStore } from './store';
 import { assertRequestNotErased, rememberErasedRequests } from './deleted-requests';
 
 export type SessionAdmissionContext = { ownerId: string; sessionId: string; scenarioId: string; scenarioVersion: string; requestId: string; now: string; database: PracticeDatabase };
-export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void> };
+export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void>; admissionLimits?: Partial<AdmissionLimits> };
 export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; accommodations?: string[] };
 export type SessionMutationResult = { session: SessionView; job?: JobView; hint?: string };
 export type TrustedSupportGuard = (database: PracticeDatabase, now: string) => void;
@@ -23,14 +24,16 @@ export function sessionView(session: Session): SessionView {
 }
 export class SessionService {
   private readonly now: () => Date;
-  private readonly limits: Required<Omit<ServiceOptions, 'now' | 'reservations' | 'admissionPolicy'>>;
+  private readonly limits: Required<Omit<ServiceOptions, 'now' | 'reservations' | 'admissionPolicy' | 'admissionLimits'>>;
+  private readonly admissionLimits: AdmissionLimits;
   private readonly admissionPolicy: ServiceOptions['admissionPolicy'];
   private readonly reservations: Record<JobKind, number>;
   constructor(readonly store: PracticeStore, private readonly resolveScenario: (id: string, version?: string) => Scenario | null, options: ServiceOptions = {}) {
     this.now = options.now ?? (() => new Date());
     this.admissionPolicy = options.admissionPolicy;
-    const { now: _now, reservations: _reservations, admissionPolicy: _policy, ...limits } = options;
-    void _now; void _reservations; void _policy;
+    this.admissionLimits = admissionLimits(options.admissionLimits);
+    const { now: _now, reservations: _reservations, admissionPolicy: _policy, admissionLimits: _admissionLimits, ...limits } = options;
+    void _now; void _reservations; void _policy; void _admissionLimits;
     this.limits = { maxDailySessions: 10, maxActiveSessions: 3, maxDailyUsd: 5, maxMonthlyUsd: 50, maxGlobalDailyUsd: 50, maxSessionUsd: 1, maxRuns: 30, maxAiCalls: 25, leaseMs: 60_000, ...limits };
     this.reservations = { run: 0, interviewer: 0.04, assistant: 0.08, coach: 0.15, ...options.reservations };
     if (Object.values(this.limits).some(value => !Number.isFinite(value) || value <= 0) || Object.values(this.reservations).some(value => !Number.isFinite(value) || value < 0)) throw new DomainError('invalid', 'Practice limits must be finite positive numbers and reservations nonnegative.');
@@ -52,8 +55,18 @@ export class SessionService {
         return existing.result as T;
       }
       assertRequestNotErased(db, ownerId, requestId, fingerprint);
-      const now = this.at(), result = await apply(db, now);
-      db.requests[key] = { ownerId, requestId, fingerprint, result: structuredClone(result), createdAt: now, ...(sessionId ? { sessionId } : {}) };
+      // Ownership precedes capacity diagnostics so foreign/missing sessions do
+      // not disclose another account's existence or admission state.
+      if (sessionId) ownedSession(db.sessions, ownerId, sessionId);
+      if (operation === 'cancel-job') {
+        const jobId = (payload as { jobId: string }).jobId;
+        if (!Object.values(db.sessions).some(session => session.ownerId === ownerId && session.jobs.some(job => job.id === jobId))) throw new DomainError('not_found', 'Job not found.');
+      }
+      const now = this.at(), lane = mutationLane(db, ownerId, operation, payload, sessionId);
+      assertMutationAdmission(db, ownerId, operation, lane, now, this.admissionLimits);
+      const before = captureMutationGrowth(db, ownerId), result = await apply(db, now);
+      assertMutationGrowth(db, ownerId, before, lane, this.admissionLimits);
+      db.requests[key] = { ownerId, requestId, fingerprint, result: structuredClone(result), createdAt: now, ...(sessionId ? { sessionId } : {}), ...mutationAdmissionMetadata(lane) };
       return result;
     });
   }
@@ -66,6 +79,7 @@ export class SessionService {
     db.ledger.push({ id: randomUUID(), ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:reserve`, kind: 'reservation', amountUsd: amount, createdAt: now, budgetAt: now });
   }
   private enqueue(db: PracticeDatabase, session: Session, kind: JobKind, requestId: string, input: Record<string, unknown>, now: string): PracticeJob {
+    assertJobAdmission(db, session.ownerId, this.admissionLimits);
     if (kind === 'run' && session.usage.runs >= this.limits.maxRuns) throw new DomainError('quota', 'This attempt has reached its test-run limit.');
     const aiLimitReached = kind !== 'run' && session.usage.aiCalls >= this.limits.maxAiCalls;
     if (kind === 'assistant' && aiLimitReached) throw new DomainError('quota', 'This attempt has reached its AI request limit.');
