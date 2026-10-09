@@ -238,6 +238,23 @@ export class SessionService {
       return { session: sessionView(session) };
     });
   }
+  async undoEdit(ownerId: string, id: string, input: Mutation & { proposalId: string }): Promise<SessionMutationResult> {
+    return this.mutate(ownerId, input.requestId, 'undo-edit', { proposalId: input.proposalId }, id, (db, now) => {
+      const session = ownedSession(db.sessions, ownerId, id); assertRevision(session, input.expectedRevision); assertCoding(session);
+      const proposal = session.editProposals.find(item => item.id === input.proposalId && item.status === 'accepted' && !item.undoneAt);
+      if (!proposal) throw new DomainError('not_found', 'Accepted edit available for undo was not found.');
+      const base = session.snapshots.find(snapshot => snapshot.id === proposal.baseSnapshotId && snapshot.sha256 === proposal.baseSha256);
+      if (!base || digest(base.files) !== proposal.baseSha256) throw new DomainError('unavailable', 'The original edit snapshot could not be verified. Your saved work was preserved.');
+      const scenario = this.scenario(session), expected = digest(validateFiles({ ...base.files, ...proposal.files }, scenario));
+      if (selectedSnapshot(session).sha256 !== expected || digest(session.files) !== expected) throw new DomainError('conflict', 'Files changed after this accepted edit. Undo would overwrite newer work; your current files were preserved.');
+      session.files = validateFiles(base.files, scenario);
+      const restored = createSnapshot(session, session.files, now);
+      // Keep the original acceptance and all snapshots as historical evidence.
+      proposal.undoneAt = now; proposal.undoSnapshotId = restored.id;
+      appendEvent(session, 'workspace.saved', { snapshotId: restored.id, sha256: restored.sha256 }, input.requestId, now, 'learner');
+      return { session: sessionView(session) };
+    });
+  }
   async revealHint(ownerId: string, id: string, input: Mutation): Promise<SessionMutationResult> {
     return this.mutate(ownerId, input.requestId, 'hint', {}, id, (db, now) => {
       const session = ownedSession(db.sessions, ownerId, id); assertRevision(session, input.expectedRevision); assertCoding(session);

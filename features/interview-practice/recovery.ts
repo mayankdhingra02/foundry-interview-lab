@@ -6,7 +6,7 @@ import type { SessionView } from "@/lib/interview-practice/types";
 export const pendingStoragePrefix = "foundry-practice-pending:";
 export type PendingRequest = { payload: string; uncertain: boolean; createdAt: string; title?: string; scenarioVersion?: string };
 export type PendingIntent = { path: string; body: Record<string, unknown>; operationRequestId?: string };
-const paths = new Set(["commands", "hints", "runs", "assistant", "turns", "edit-decisions", "drills", "reports", "interaction", "cancel-job"]);
+const paths = new Set(["commands", "hints", "runs", "assistant", "turns", "edit-decisions", "drills", "reports", "interaction", "cancel-job", "undo-edit"]);
 const maxEntries = 20;
 const maxStorageCharacters = 160_000;
 const replayWindowMs = 30 * 24 * 60 * 60 * 1000;
