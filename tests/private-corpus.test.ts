@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { chmod, lstat, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getScenario } from '../lib/content/scenarios';
 import { digest } from '../lib/interview-practice/domain';
@@ -22,7 +23,7 @@ function capture(input: PrivateCorpus, selected = input.cases[0]): PrivateCaptur
 }
 const captures = (...values: PrivateCapture[]): PrivateCaptureSet => ({ schemaVersion: 1, provenance: 'private-corpus-captures', captures: values });
 const temporary: string[] = [];
-async function directory() { const path = await mkdtemp('/private/tmp/foundry-private-corpus-'); temporary.push(path); return path; }
+async function directory() { const path = await mkdtemp(join(await realpath(tmpdir()), 'foundry-private-corpus-')); temporary.push(path); return path; }
 afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 describe('strict private corpus identities and faithful conditions', () => {
