@@ -1,7 +1,21 @@
 name: Verify application
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
+# Docker Official Images via the verified Docker publisher on ECR Public.
+# Tag manifests were checked 2026-10-09; digests make CI provisioning repeatable.
+# Production Dockerfile/runtime defaults remain unchanged.
+env:
+  CI_PYTHON_IMAGE: public.ecr.aws/docker/library/python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+  CI_POSTGRES_IMAGE: public.ecr.aws/docker/library/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+  CI_NODE_IMAGE: public.ecr.aws/docker/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+  CI_DOCKER_CLI_IMAGE: public.ecr.aws/docker/library/docker:29-cli@sha256:1a4c7cb63513f349bdad01fcc6e0f3f2f67d37b9da86f14dc0d4a0942eecda00
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -30,8 +44,16 @@ jobs:
           cache: npm
       - run: npm ci
       # Deliberate CI image provisioning; learner execution never pulls images.
-      - run: docker pull python:3.11-slim
-      - run: docker pull postgres:16-alpine
+      - name: Provision reviewed qualification images
+        run: |
+          provision() {
+            local source="$1" target="$2"
+            if ! docker image inspect "$source" > /dev/null 2>&1; then docker pull "$source"; fi
+            docker image tag "$source" "$target"
+            docker image inspect --format '{{json .RepoDigests}}' "$source"
+          }
+          provision "$CI_PYTHON_IMAGE" python:3.11-slim
+          provision "$CI_POSTGRES_IMAGE" postgres:16-alpine
       - run: FOUNDRY_DOCKER_INTEGRATION=1 npm test -- tests/runner.test.ts
       - run: RUN_POSTGRES_INTEGRATION=1 npm test -- tests/postgres.integration.test.ts tests/billing.integration.test.ts tests/voice-postgres.integration.test.ts tests/review-postgres.integration.test.ts
       - run: FOUNDRY_OPERATIONS_QUALIFICATION=1 node --conditions=react-server --import tsx scripts/operations/qualify.ts --output work/operations-qualification.json
@@ -58,7 +80,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: docker pull python:3.11-slim
+      - name: Provision reviewed browser runtime
+        run: |
+          if ! docker image inspect "$CI_PYTHON_IMAGE" > /dev/null 2>&1; then docker pull "$CI_PYTHON_IMAGE"; fi
+          docker image tag "$CI_PYTHON_IMAGE" python:3.11-slim
+          docker image inspect --format '{{json .RepoDigests}}' "$CI_PYTHON_IMAGE"
       - name: Configure synthetic local identity without printing its secret
         run: |
           mkdir -p work
@@ -89,6 +115,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: docker build --target web --tag foundry-lab-ops-qualification:web .
-      - run: docker build --target worker --tag foundry-lab-ops-qualification:worker .
+      - name: Provision reviewed deployment bases
+        run: |
+          for source in "$CI_NODE_IMAGE" "$CI_DOCKER_CLI_IMAGE"; do
+            if ! docker image inspect "$source" > /dev/null 2>&1; then docker pull "$source"; fi
+            docker image inspect --format '{{json .RepoDigests}}' "$source"
+          done
+      - run: docker build --build-arg NODE_IMAGE="$CI_NODE_IMAGE" --build-arg DOCKER_CLI_IMAGE="$CI_DOCKER_CLI_IMAGE" --target web --tag foundry-lab-ops-qualification:web .
+      - run: docker build --build-arg NODE_IMAGE="$CI_NODE_IMAGE" --build-arg DOCKER_CLI_IMAGE="$CI_DOCKER_CLI_IMAGE" --target worker --tag foundry-lab-ops-qualification:worker .
       - run: FOUNDRY_CONTAINER_SMOKE=1 node --conditions=react-server --import tsx scripts/operations/container-smoke.ts
