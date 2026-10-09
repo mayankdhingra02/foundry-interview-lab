@@ -7,6 +7,7 @@ import type { Actor } from './auth';
 import { HttpError } from './http';
 import { SessionService, sessionView, type TrustedSupportGuard } from './session-service';
 import type { PracticeStore } from './store';
+import { assertRequestNotErased } from './deleted-requests';
 
 export type ReviewActor = Pick<Actor, 'id' | 'local'>;
 export type CreateReviewInput = { requestId: string; category: 'feedback' | 'technical'; reportId?: string; message: string; criterionIds?: string[]; inspectionConsent: boolean; supportActionsConsent: boolean };
@@ -44,6 +45,7 @@ export class ReviewService {
     const id = `review_${digest({ actorId, requestId })}`, key = requestKey(ownerId, id), fingerprint = digest({ operation, payload, sessionId: sessionId ?? null });
     const existing = db.requests[key];
     if (existing) { if (existing.fingerprint !== fingerprint) throw new DomainError('conflict', 'This review request key was used for different input.'); return String(existing.result); }
+    assertRequestNotErased(db, ownerId, id, fingerprint);
     const reference = apply();
     // Cache only references, never private inspection output or unpublished draft contents.
     db.requests[key] = { ownerId, requestId: id, fingerprint, result: reference, createdAt: this.at(), ...(sessionId ? { sessionId } : {}) }; return reference;

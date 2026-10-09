@@ -3,7 +3,7 @@ import { EventValidationError, parsePracticeEvent, type EventPayload } from './e
 import type { EventType, PracticeEvent, PublicScenario, Scenario, Session, Snapshot } from './types';
 
 export class DomainError extends Error {
-  constructor(public readonly code: 'invalid' | 'not_found' | 'conflict' | 'quota' | 'unavailable', message: string, public readonly status = code === 'not_found' ? 404 : code === 'conflict' ? 409 : code === 'quota' ? 429 : code === 'unavailable' ? 503 : 400) {
+  constructor(public readonly code: 'invalid' | 'not_found' | 'conflict' | 'quota' | 'unavailable' | 'request_deleted', message: string, public readonly status = code === 'request_deleted' ? 410 : code === 'not_found' ? 404 : code === 'conflict' ? 409 : code === 'quota' ? 429 : code === 'unavailable' ? 503 : 400) {
     super(message); this.name = 'DomainError';
   }
 }
