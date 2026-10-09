@@ -29,7 +29,9 @@ export async function processOneJob(service: SessionService, workerId = `worker-
     await service.completeJob(claim, result);
   } catch (error) {
     const definitelyNotCalled = error instanceof ProviderFailure && !error.mayHaveBilled;
-    await service.failJob(claim, controller.signal.aborted
+    await service.failJob(claim, error instanceof ProviderFailure && error.category === 'privacy_input'
+      ? 'Remove credential-like values from the workspace before requesting a complete AI file edit. Your files are saved and were not sent to the model.'
+      : controller.signal.aborted
       ? 'Operation interrupted or cancelled. The acknowledged attempt remains available.'
       : `${claim.job.kind === 'run' ? 'Code execution' : 'AI operation'} could not finish. Retry when the service is available.`, definitelyNotCalled ? 0 : error instanceof ProviderFailure ? error.inference?.usd : undefined, error instanceof ProviderFailure ? error.inference : undefined);
   } finally { clearInterval(heartbeat); }

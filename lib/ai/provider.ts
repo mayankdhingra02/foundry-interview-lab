@@ -2,6 +2,7 @@ import type { CoachOutput, EvidenceItem, InferenceRecord, InterviewProposal, Job
 import { buildEvidence, validateInterviewProposal, validateReport } from '../interview-practice/evidence';
 import { capabilities } from '../server/config';
 import { INPUT_BYTES, modelPolicy, type AiRole } from './policy';
+import { sanitizeModelContext } from './privacy';
 
 export const PROMPT_VERSION = 'foundry-2026-10-09-v1';
 type JsonSchema = Record<string, unknown>;
@@ -18,7 +19,7 @@ const boundary = `You operate inside Foundry Interview Lab, an educational inter
 
 type ProviderResponse = { value: unknown; record: InferenceRecord };
 export class ProviderFailure extends Error {
-  constructor(public readonly mayHaveBilled: boolean, public readonly inference?: InferenceRecord) { super('Model inference could not finish.'); }
+  constructor(public readonly mayHaveBilled: boolean, public readonly inference?: InferenceRecord, public readonly category?: 'privacy_input') { super('Model inference could not finish.'); }
 }
 
 async function infer(role: AiRole, instructions: string, context: unknown, schema: JsonSchema, signal?: AbortSignal): Promise<ProviderResponse> {
@@ -26,7 +27,9 @@ async function infer(role: AiRole, instructions: string, context: unknown, schem
   if (!key || !capabilities().ai) throw new ProviderFailure(false);
   let policy;
   try { policy = modelPolicy(); } catch { throw new ProviderFailure(false); }
-  const input = JSON.stringify(context);
+  const sanitized = sanitizeModelContext(context);
+  if (role === 'assistant' && (context as { mode?: string }).mode === 'edit' && sanitized.redactions) throw new ProviderFailure(false, undefined, 'privacy_input');
+  const input = JSON.stringify({ ...(sanitized.value as Record<string, unknown>), privacyRedactions: sanitized.redactions });
   if (Buffer.byteLength(input) > INPUT_BYTES[role]) throw new ProviderFailure(false);
   const startedAt = new Date().toISOString();
   let response: Response;
@@ -73,7 +76,7 @@ function evidenceContext(session: Session, base: Record<string, unknown>, role: 
     const cap = e.kind === 'snapshot' ? 5000 : e.kind === 'test' ? 1200 : 1600;
     const item = { ...e, content: e.content.slice(0, cap), excerpt: e.content.length > cap };
     evidence.push(item); context.omittedEvidenceCount -= 1;
-    if (Buffer.byteLength(JSON.stringify(context)) > INPUT_BYTES[role]) { evidence.pop(); context.omittedEvidenceCount += 1; }
+    if (Buffer.byteLength(JSON.stringify(context)) > INPUT_BYTES[role] - 128) { evidence.pop(); context.omittedEvidenceCount += 1; }
   }
   return context;
 }
