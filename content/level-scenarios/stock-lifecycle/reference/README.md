@@ -1,0 +1,11 @@
+# Reserve, retry, cancel
+
+Implement ReservationStore(path), seed, available, reserve(request_id, sku, quantity), cancel(request_id), close(). Senior preparation draft; expert calibration and learner pilot remain pending. Prerequisites: transactions, idempotency, failure-state modeling and independent-connection concurrency tests.
+
+Use SQLite durable coordination across separate connections/processes. Each worker owns its connection; no connection sharing. seed inserts initial stock before any requests; concurrent reseeding is excluded. Identifiers are non-empty strings preserved exactly. Stock is an exact integer >= 0; reservation quantities exact integers > 0. Booleans are invalid. Validate before mutation and raise ValueError for malformed values.
+
+reserve returns True with exactly one stock decrement for an accepted new request; missing/insufficient returns False unchanged. Persist both outcomes. Exact retry returns its original bool across reopen; conflicting payload for a recorded ID raises ValueError unchanged. cancel(request_id) returns True exactly once for a previously accepted active request and restores its original quantity atomically. Unknown, denied or already cancelled requests return False unchanged. Unknown cancellation does not create a request identity. A reserve retry after cancellation still returns its original True but never re-debits or reactivates. Conflicting reuse remains invalid after cancellation.
+
+Reserve and cancellation must coordinate independent workers atomically. Starting from seeded stock, available plus quantities of accepted active reservations equals seeded stock; neither side may become negative. Concurrent retries of one request may all return its original True while decrementing only once. Concurrent cancellation of one active request has exactly one True. Explain your serialization point and operational limits (database lock contention, bounded test schedules and absent distributed-service guarantees).
+
+Public and protected checks cover these disclosed requirements. Learner checks are additive and cannot replace protected checks. This remains the same inventory practice family, so completing an easier variant does not make this an unseen retest.

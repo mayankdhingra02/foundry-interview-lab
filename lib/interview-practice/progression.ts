@@ -1,5 +1,6 @@
 import type { CoachingFinding, PublicScenario, RubricLevel, SessionView } from './types';
 import { timingConditions } from './timing';
+import { scenarioFamilyId, type ScenarioPrerequisite } from './curriculum';
 
 type ObservedLevel = Exclude<RubricLevel, 'Not observed'>;
 export type ProgressionGoals = { selectedCompetencies?: string[] };
@@ -28,6 +29,7 @@ export type SkillProgress = {
 export type PracticeRecommendation = {
   scenarioId: string; title: string; fresh: boolean; reason: string;
   version: string; href: string; durationMinutes: number; matchedCompetencyIds: string[];
+  prerequisites?: ScenarioPrerequisite[];
   matchedGoalIds: string[]; matchingBasis: 'same-criterion' | 'authored-transfer-map' | 'selected-goal' | 'catalog-exploration';
 };
 export type FoundryLessonNavigation =
@@ -63,6 +65,9 @@ const transfer: Record<string, readonly string[]> = {
   'invoice-verification': ['verification', 'retry-idempotency'],
   'stock-atomicity': ['concurrency-atomicity'], 'stock-consistency': ['failure-semantics', 'state-invariants'],
   'stock-verification': ['verification', 'concurrency-atomicity'],
+  'count-correctness': ['state-invariants', 'contract-reasoning'], 'count-validation': ['input-validation'], 'count-verification': ['verification'],
+  'retry-identity': ['retry-idempotency'], 'retry-consistency': ['failure-semantics', 'state-invariants'], 'retry-verification': ['verification', 'retry-idempotency'],
+  'lifecycle-atomicity': ['concurrency-atomicity', 'state-invariants'], 'lifecycle-failures': ['failure-semantics', 'retry-idempotency'], 'lifecycle-verification': ['verification', 'concurrency-atomicity'],
   'rollup-comprehension': ['repository-comprehension'], 'rollup-correctness': ['retry-idempotency', 'failure-semantics'],
   'rollup-verification': ['verification'], 'export-compatibility': ['interface-compatibility'],
   'export-extension': ['interface-compatibility', 'responsibility-boundaries'], 'export-verification': ['verification'],
@@ -104,7 +109,7 @@ function conditions(session: SessionView, seen: Set<string>): PracticeConditions
   const assistantResponses = session.assistantMessages.filter(message => message.role === 'assistant').length;
   const acceptedEdits = session.editProposals.filter(proposal => proposal.status === 'accepted').length;
   return {
-    exposure: session.promptExposure === 'repeated' || seen.has(session.scenarioId) ? 'repeated' : 'fresh',
+    exposure: session.promptExposure === 'repeated' || seen.has(scenarioFamilyId(session.scenario)) ? 'repeated' : 'fresh',
     mode: session.mode, aiHelpAllowed: session.configuration.aiHelp,
     assistantRequests, assistantResponses, acceptedEdits, hintsOpened: session.hintsOpened,
     helpReceived: assistantResponses > 0 || acceptedEdits > 0 || session.hintsOpened > 0,
@@ -125,7 +130,7 @@ export function buildProgression(sessions: SessionView[], catalog: PublicScenari
   const seen = new Set<string>(), evidence = new Set<string>();
   let assessedAttempts = 0, originalReportsSuperseded = 0, ignoredFindings = 0;
   for (const session of attempts) {
-    const context = conditions(session, seen); seen.add(session.scenarioId);
+    const context = conditions(session, seen); seen.add(scenarioFamilyId(session.scenario));
     // Array order is publication order. A correction supersedes its original
     // without introducing a new learner attempt or a new observation date.
     const report = session.reports.at(-1);
@@ -166,7 +171,7 @@ export function buildProgression(sessions: SessionView[], catalog: PublicScenari
       group.attemptIds.push(observation.sessionId); group.levels[observation.level]++; groups.set(key, group);
     }
     const fresh = history.filter(observation => observation.conditions.exposure === 'fresh');
-    const broaderCoverage = new Set(fresh.map(observation => observation.scenarioId)).size >= 2;
+    const broaderCoverage = new Set(fresh.map(observation => scenarioFamilyId(byId.get(observation.sessionId)!.scenario))).size >= 2;
     return {
       id, name: row.name, observations: history.length, lastObservedAt: latest.observedAt, level: latest.level, levels: counts,
       evidenceCount: references.size, freshObservations: fresh.length, repeatedObservations: history.length - fresh.length,
@@ -194,11 +199,11 @@ export function buildProgression(sessions: SessionView[], catalog: PublicScenari
     const matching = gaps.filter(gap => overlap(competencies(gap.id), tags));
     const matchingGoals = selected.filter(goal => overlap(competencies(goal), tags));
     const exact = matching.some(gap => scenario.rubric.some(criterion => criterion.id === gap.id));
-    const fresh = !seen.has(scenario.id);
+    const fresh = !seen.has(scenarioFamilyId(scenario));
     const reason = matching.length ? `${fresh ? 'An unseen task' : 'Deliberate repeat practice'} covering ${matching.map(skill => skill.name).join(', ')}. The latest recorded finding${matching.length === 1 ? ' is' : 's are'} ${matching.map(skill => skill.level).join(', ')}.${exact ? '' : ' Related-task matching uses the authored transfer map; rubric levels are not interchangeable.'}`
       : matchingGoals.length ? `${fresh ? 'An unseen task' : 'A deliberate repeat'} aligned with your selected competencies; no observed gap is inferred from that choice.`
       : fresh ? 'An unseen scenario to collect practice evidence; no specific weakness is inferred.' : 'Repeat for deliberate practice; familiarity remains recorded.';
-    return { scenarioId: scenario.id, version: scenario.version, title: scenario.title, fresh, reason, href: `/interview-practice?scenario=${encodeURIComponent(scenario.id)}`, durationMinutes: scenario.durationMinutes, matchedCompetencyIds: matching.map(skill => skill.id), matchedGoalIds: matchingGoals, matchingBasis: matching.length ? exact ? 'same-criterion' as const : 'authored-transfer-map' as const : matchingGoals.length ? 'selected-goal' as const : 'catalog-exploration' as const };
+    return { scenarioId: scenario.id, version: scenario.version, title: scenario.title, fresh, reason, href: `/interview-practice?scenario=${encodeURIComponent(scenario.id)}`, durationMinutes: scenario.durationMinutes, matchedCompetencyIds: matching.map(skill => skill.id), matchedGoalIds: matchingGoals, ...(scenario.curriculum ? { prerequisites: structuredClone(scenario.curriculum.prerequisites) } : {}), matchingBasis: matching.length ? exact ? 'same-criterion' as const : 'authored-transfer-map' as const : matchingGoals.length ? 'selected-goal' as const : 'catalog-exploration' as const };
   }).sort((a, b) => {
     const priority = (item: PracticeRecommendation) => item.fresh ? item.matchedCompetencyIds.length ? 0 : item.matchedGoalIds.length ? 1 : 2 : item.matchedCompetencyIds.length ? 3 : item.matchedGoalIds.length ? 4 : 5;
     const firstGap = (item: PracticeRecommendation) => item.matchedCompetencyIds.length ? Math.min(...item.matchedCompetencyIds.map(id => gaps.findIndex(gap => gap.id === id))) : gaps.length;
@@ -211,6 +216,13 @@ export function buildProgression(sessions: SessionView[], catalog: PublicScenari
   const foundryLessons = lessons.filter(item => item.competencies.some(id => targetTags.has(id))).map(item => structuredClone(item));
   const steps: StudyStep[] = [];
   const first = recommendations.find(item => item.fresh && item.matchedCompetencyIds.length) ?? recommendations.find(item => item.fresh && item.matchedGoalIds.length) ?? recommendations.find(item => item.fresh);
+  const prerequisiteIds = new Set(first?.prerequisites?.flatMap(item => item.lesson ? [item.lesson.id] : []) ?? []);
+  const prerequisiteLessons = lessons.filter(item => prerequisiteIds.has(item.id));
+  for (const reference of prerequisiteLessons.toReversed()) {
+    const existing = foundryLessons.findIndex(item => item.id === reference.id);
+    if (existing >= 0) foundryLessons.splice(existing, 1);
+    foundryLessons.unshift(structuredClone(reference));
+  }
   if (first) steps.push({ kind: 'scenario', id: `scenario:${first.scenarioId}@${first.version}`, title: first.title, reason: first.reason, href: first.href, scenarioId: first.scenarioId, version: first.version, fresh: first.fresh, competencyIds: unique([...first.matchedCompetencyIds, ...first.matchedGoalIds]), estimatedMinutes: first.durationMinutes });
   const drillChoices = gaps.flatMap(gap => {
     const latest = gap.history.at(-1)!, session = byId.get(latest.sessionId)!;
@@ -219,7 +231,7 @@ export function buildProgression(sessions: SessionView[], catalog: PublicScenari
   const drill = drillChoices[0];
   if (drill) steps.push({ kind: 'drill', id: `drill:${drill.session.id}:${drill.drill.id}`, title: drill.drill.title, reason: `Practise ${drill.gap.name} using the authored drill from its original scenario version.${drill.completed ? ' Completion was self-reported; revisit the exercise before another attempt.' : ''}`, href: `/interview-practice/${encodeURIComponent(drill.session.id)}`, sessionId: drill.session.id, scenarioId: drill.session.scenarioId, scenarioVersion: drill.session.scenarioVersion, drillId: drill.drill.id, competencyIds: [drill.gap.id], lesson: drill.drill.lesson, exercise: drill.drill.exercise, completedSelfReport: drill.completed });
   const resource = foundryLessons[0];
-  if (resource && steps.length < 3) steps.push({ kind: 'lesson', id: `lesson:${resource.id}`, title: resource.title, reason: 'Review this related Foundry lesson. Its route is verified in the main Foundry source; opening it requires that integration.', foundryPath: resource.foundryPath, competencyIds: resource.competencies.filter(id => targetTags.has(id)), estimatedMinutes: resource.estimatedMinutes, requiresFoundryIntegration: true });
+  if (resource && steps.length < 3) steps.push({ kind: 'lesson', id: `lesson:${resource.id}`, title: resource.title, reason: prerequisiteIds.has(resource.id) ? 'Review this authored prerequisite before the recommended task. No prerequisite completion or mastery is inferred; opening it requires the Foundry integration.' : 'Review this related Foundry lesson. Its route is verified in the main Foundry source; opening it requires that integration.', foundryPath: resource.foundryPath, competencyIds: resource.competencies.filter(id => targetTags.has(id)), estimatedMinutes: resource.estimatedMinutes, requiresFoundryIntegration: true });
   if (!first && recommendations.length && steps.length < 3) {
     const repeat = recommendations[0];
     steps.push({ kind: 'scenario', id: `scenario:${repeat.scenarioId}@${repeat.version}`, title: repeat.title, reason: `${repeat.reason} No unseen catalog task is available, so this repeat cannot establish fresh-task transfer.`, href: repeat.href, scenarioId: repeat.scenarioId, version: repeat.version, fresh: false, competencyIds: unique([...repeat.matchedCompetencyIds, ...repeat.matchedGoalIds]), estimatedMinutes: repeat.durationMinutes });
@@ -231,7 +243,7 @@ export function buildProgression(sessions: SessionView[], catalog: PublicScenari
     studyPlan: {
       policyVersion: 'deterministic-v1', status, selectedCompetencies: selected, steps: steps.slice(0, 3),
       explanation: assessedAttempts === 0 ? 'There are no completed report observations yet. Start with a task aligned with your goals and finish its debrief; no weakness is inferred.' : !skills.length ? 'The latest reports contain no usable observed findings. Missing observations are not weaknesses; collect evidence in another attempt.' : catalogLimited ? 'Use related drills and available practice while the catalog grows. Some competencies lack an unseen matching task, so transfer cannot yet be checked.' : 'Use the latest evidence-linked findings to choose related practice, then collect evidence on an unseen task. The profile remains provisional.',
-      limitations: [...(catalogLimited ? ['The catalog cannot provide fresh matching coverage for every observed gap.'] : []), ...(ignoredFindings ? ['Findings with unknown criteria or missing/invalid evidence were excluded.'] : []), ...(unresolvedGoals.length ? ['Some selected competencies have no authored catalog mapping.'] : []), 'Drill completion is self-report and does not create a skill observation.', 'Related Foundry lesson paths are source references until the main-site integration supplies navigation.'],
+      limitations: [...(catalogLimited ? ['The catalog cannot provide fresh matching coverage for every observed gap.'] : []), ...(ignoredFindings ? ['Findings with unknown criteria or missing/invalid evidence were excluded.'] : []), ...(unresolvedGoals.length ? ['Some selected competencies have no authored catalog mapping.'] : []), 'Same-family task variants remain repeated exposure and cannot establish unseen-task transfer.', 'Authored prerequisites are preparation guidance, not inferred mastery or access locks.', 'Drill completion is self-report and does not create a skill observation.', 'Related Foundry lesson paths are source references until the main-site integration supplies navigation.'],
       foundryLessons,
     },
     details: {

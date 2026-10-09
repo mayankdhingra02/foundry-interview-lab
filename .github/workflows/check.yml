@@ -52,7 +52,7 @@ jobs:
           image_id="$(docker image inspect --format '{{.Id}}' "$CI_PYTHON_IMAGE")"
           [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
           echo "PYTHON_IMAGE_ID=$image_id" >> "$GITHUB_ENV"
-      - run: FOUNDRY_DOCKER_INTEGRATION=1 npm test -- tests/runner.test.ts
+      - run: FOUNDRY_DOCKER_INTEGRATION=1 npm test -- tests/runner.test.ts tests/level-content-docker.integration.test.ts
       - run: RUN_POSTGRES_INTEGRATION=1 npm test -- tests/postgres.integration.test.ts tests/billing.integration.test.ts tests/voice-postgres.integration.test.ts tests/review-postgres.integration.test.ts tests/retention-postgres.integration.test.ts tests/deleted-requests.integration.test.ts tests/edit-undo.integration.test.ts tests/readiness-postgres.integration.test.ts tests/timing-postgres.integration.test.ts tests/learner-checks-postgres.integration.test.ts
       - run: FOUNDRY_OPERATIONS_QUALIFICATION=1 node --conditions=react-server --import tsx scripts/operations/qualify.ts --output work/operations-qualification.json
       # This job owns a fresh disposable VM and the reviewed cached runtime.

@@ -1,0 +1,186 @@
+{
+  "id": "stock-foundations",
+  "version": "1.0.0",
+  "familyId": "inventory-reservations",
+  "title": "Count every unit",
+  "summary": "Repair an in-memory stock counter with strict validation and unchanged failure state.",
+  "durationMinutes": 30,
+  "level": "Junior",
+  "tags": [
+    "Inventory",
+    "Junior",
+    "Original draft"
+  ],
+  "language": "python",
+  "curriculum": {
+    "tier": "Junior",
+    "calibration": "unreviewed",
+    "constraints": [
+      "Keep Inventory(stock), available(sku), and reserve(sku, quantity); use an independent copy of the input mapping. Missing SKU returns None from available and False from reserve.",
+      "An initial stock mapping has non-empty string SKU keys and exact integer quantities >= 0. Booleans, non-integers, negative quantities and invalid keys raise ValueError.",
+      "Reservation quantity must be an exact integer > 0 and SKU a non-empty string; invalid input raises ValueError before any mutation. Whitespace-only SKU is invalid; other SKU text is preserved exactly.",
+      "reserve returns True and decrements exactly once if enough stock exists; insufficient or missing stock returns False unchanged. This exercise is single-process in memory; persistence and concurrency are outside its contract."
+    ],
+    "prerequisites": [
+      {
+        "id": "correctness",
+        "title": "Correctness and boundary tests",
+        "description": "Be comfortable tracing a branch and writing an assertion for a boundary value.",
+        "lesson": {
+          "id": "correctness",
+          "foundryPath": "/dsa/foundations/correctness"
+        }
+      }
+    ]
+  },
+  "starterFiles": [
+    "README.md",
+    "inventory.py"
+  ],
+  "referenceFiles": [
+    "README.md",
+    "inventory.py"
+  ],
+  "stages": [
+    {
+      "id": "understand",
+      "title": "Understand the contract",
+      "brief": "Repair an in-memory stock counter with strict validation and unchanged failure state. Use Python 3.11 standard-library modules only.",
+      "requirements": [
+        "Keep Inventory(stock), available(sku), and reserve(sku, quantity); use an independent copy of the input mapping. Missing SKU returns None from available and False from reserve.",
+        "An initial stock mapping has non-empty string SKU keys and exact integer quantities >= 0. Booleans, non-integers, negative quantities and invalid keys raise ValueError.",
+        "Reservation quantity must be an exact integer > 0 and SKU a non-empty string; invalid input raises ValueError before any mutation. Whitespace-only SKU is invalid; other SKU text is preserved exactly.",
+        "reserve returns True and decrements exactly once if enough stock exists; insufficient or missing stock returns False unchanged. This exercise is single-process in memory; persistence and concurrency are outside its contract."
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Implement the change",
+      "brief": "Preserve the documented interface and explain your choices.",
+      "requirements": [
+        "Preserve valid behavior and exact request identity.",
+        "Make errors leave state unchanged."
+      ]
+    },
+    {
+      "id": "verify",
+      "title": "Verify the behavior",
+      "brief": "Run the authored checks and add one targeted learner regression check.",
+      "requirements": [
+        "Use the disclosed contract and failure cases.",
+        "Explain what the observed checks do not establish."
+      ]
+    },
+    {
+      "id": "debrief",
+      "title": "Defend your decisions",
+      "brief": "Explain your code, evidence and remaining limits.",
+      "requirements": [
+        "Cite concrete code or executed checks.",
+        "Describe one alternative and its trade-off."
+      ]
+    }
+  ],
+  "rubric": [
+    {
+      "id": "count-correctness",
+      "name": "State invariants",
+      "description": "Keep accepted quantity plus remaining stock equal to the original count.",
+      "anchors": {
+        "strong": "Preserves exact counts for accepted and rejected requests and explains the invariant.",
+        "developing": "Common success works but a rejection changes state or count conservation is not explained.",
+        "needsWork": "Accepts overspending, negative quantities or state corruption."
+      }
+    },
+    {
+      "id": "count-validation",
+      "name": "Input boundaries",
+      "description": "Validate exact types before changing state.",
+      "anchors": {
+        "strong": "Rejects booleans and malformed values without mutating caller or internal state.",
+        "developing": "Validation handles typical input but misses a disclosed type or ownership boundary.",
+        "needsWork": "Treats Python booleans as stock quantities or mutates the input mapping."
+      }
+    },
+    {
+      "id": "count-verification",
+      "name": "Targeted regression evidence",
+      "description": "Use a small failing boundary check to support the repair.",
+      "anchors": {
+        "strong": "Adds a targeted regression and explains why sequential checks do not establish concurrent safety.",
+        "developing": "Runs common success checks without a targeted boundary example.",
+        "needsWork": "Claims behavior unsupported by checks or skips verification."
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "stock-foundations-probe-1",
+      "stageId": "debrief",
+      "competencyId": "count-correctness",
+      "question": "Which statement preserves the count invariant on a rejected reservation?"
+    },
+    {
+      "id": "stock-foundations-probe-2",
+      "stageId": "debrief",
+      "competencyId": "count-validation",
+      "question": "Which inputs can compare like integers while violating this contract?"
+    },
+    {
+      "id": "stock-foundations-probe-3",
+      "stageId": "debrief",
+      "competencyId": "count-verification",
+      "question": "What does your smallest regression check show, and what remains outside this task?"
+    }
+  ],
+  "hints": [
+    "Write the count invariant for one SKU before editing.",
+    "In Python bool is a subclass of int; exact integer validation needs a deliberate choice.",
+    "Do not subtract until every precondition has passed, and copy the caller-owned mapping."
+  ],
+  "tests": [
+    {
+      "id": "stock-foundations-public",
+      "title": "Public contract checks",
+      "file": "tests/test_public.py",
+      "visible": true,
+      "timeoutSeconds": 10
+    },
+    {
+      "id": "stock-foundations-protected",
+      "title": "Protected contract and edge checks",
+      "file": "tests/test_protected.py",
+      "visible": false,
+      "timeoutSeconds": 20
+    }
+  ],
+  "drills": [
+    {
+      "id": "stock-foundations-drill-1",
+      "title": "State invariants",
+      "competencyId": "count-correctness",
+      "lesson": "Keep accepted quantity plus remaining stock equal to the original count.",
+      "exercise": "Which statement preserves the count invariant on a rejected reservation? Write one small counterexample and a regression check."
+    },
+    {
+      "id": "stock-foundations-drill-2",
+      "title": "Input boundaries",
+      "competencyId": "count-validation",
+      "lesson": "Validate exact types before changing state.",
+      "exercise": "Which inputs can compare like integers while violating this contract? Write one small counterexample and a regression check."
+    },
+    {
+      "id": "stock-foundations-drill-3",
+      "title": "Targeted regression evidence",
+      "competencyId": "count-verification",
+      "lesson": "Use a small failing boundary check to support the repair.",
+      "exercise": "What does your smallest regression check show, and what remains outside this task? Write one small counterexample and a regression check."
+    }
+  ],
+  "rights": "Original Engineering Foundry preparation content; retained as proprietary project material. No claim of affiliation with an interview vendor.",
+  "runtime": {
+    "image": "python:3.11-slim",
+    "timeoutSeconds": 25,
+    "memoryMb": 256
+  }
+}

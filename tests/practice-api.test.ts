@@ -56,7 +56,7 @@ describe('authenticated practice HTTP contracts', () => {
   });
   it('serves a catalog without leaking protected tests, probes or reference solutions', async () => {
     const response = await api('scenarios', 'GET', undefined, {}, null), data = await response.json();
-    expect(data.scenarios).toHaveLength(5);
+    expect(data.scenarios).toHaveLength(8);
     for (const scenario of data.scenarios) {
       expect(scenario.referenceFiles).toBeUndefined(); expect(scenario.probes).toBeUndefined(); expect(scenario.hints).toBeUndefined();
       expect(scenario.tests.filter((t: {visible: boolean}) => !t.visible).every((t: {source?: string}) => t.source === undefined)).toBe(true);

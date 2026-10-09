@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { listScenarios } from '../content/scenarios';
+import { listPracticeScenarios } from '../content/scenarios';
 import { toPublicScenario } from '../interview-practice/domain';
 import { requireActor } from './auth';
 import { capabilities } from './config';
@@ -33,12 +33,12 @@ export async function practiceApi(request: Request, path: string[]) {
   return handle(request, async () => {
     const method = request.method;
     if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return privateJson({ capabilities: capabilities() });
-    if (path.length === 1 && path[0] === 'scenarios' && method === 'GET') return privateJson({ scenarios: admittedScenarios(listScenarios()).map(toPublicScenario), capabilities: capabilities() });
+    if (path.length === 1 && path[0] === 'scenarios' && method === 'GET') return privateJson({ scenarios: admittedScenarios(listPracticeScenarios()).map(toPublicScenario), capabilities: capabilities() });
     const actor = await requireActor(request), service = await getService();
     if (path[0] === 'reviews' && path[1] && path[2] === 'consent' && path.length === 3) return ownerReviewConsent(request, path[1]);
     if (path.length === 1 && path[0] === 'progress' && method === 'GET') {
       const sessions = await service.listSessions(actor.id);
-      const catalog = listScenarios().map(toPublicScenario);
+      const catalog = listPracticeScenarios().map(toPublicScenario);
       const goals = parsed(z.array(z.string().min(1).max(100)).max(20), new URL(request.url).searchParams.getAll('competency'));
       const known = new Set([...catalog, ...sessions.map(session => session.scenario)].flatMap(scenario => scenario.rubric.map(criterion => criterion.id)));
       if (goals.some(id => !known.has(id))) throw new HttpError(400, 'unknown_competency', 'Choose authored criteria from the catalog or your saved attempts.');

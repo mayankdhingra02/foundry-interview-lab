@@ -1,0 +1,195 @@
+{
+  "id": "stock-retries",
+  "version": "1.0.0",
+  "familyId": "inventory-reservations",
+  "title": "One retry, one debit",
+  "summary": "Make SQLite reservation retries durable and keep request outcome consistent with stock.",
+  "durationMinutes": 45,
+  "level": "Mid-level",
+  "tags": [
+    "Inventory",
+    "Mid-level",
+    "Original draft"
+  ],
+  "language": "python",
+  "curriculum": {
+    "tier": "Mid-level",
+    "calibration": "unreviewed",
+    "constraints": [
+      "Preserve RetryInventory(path), seed, available, reserve(request_id, sku, quantity), and close; each instance owns its SQLite connection. Fixture seed occurs before requests; concurrent callers are outside this task.",
+      "Persist the exact request ID, payload and boolean outcome across reopen. Identical retry returns the original outcome without a second debit; changed payload under that ID raises ValueError unchanged.",
+      "A new accepted request decrements once; missing or insufficient stock records False without changing stock. Record request outcome and stock change in one durable transaction.",
+      "Validate non-empty string identifiers and exact positive integer reservation quantities before any change; booleans are invalid. Seed accepts exact non-negative integer stock. Preserve non-blank identifier text exactly."
+    ],
+    "prerequisites": [
+      {
+        "id": "state-lifecycle-errors",
+        "title": "State, lifecycle and errors",
+        "description": "Understand failure outcomes and request identity before implementing durable retry handling.",
+        "lesson": {
+          "id": "state-lifecycle-errors",
+          "foundryPath": "/low-level-design/lessons/state-lifecycle-errors"
+        }
+      },
+      {
+        "id": "correctness",
+        "title": "Correctness and boundary tests",
+        "description": "Write targeted assertions for idempotent success and payload conflict.",
+        "lesson": {
+          "id": "correctness",
+          "foundryPath": "/dsa/foundations/correctness"
+        }
+      }
+    ]
+  },
+  "starterFiles": [
+    "README.md",
+    "inventory.py"
+  ],
+  "referenceFiles": [
+    "README.md",
+    "inventory.py"
+  ],
+  "stages": [
+    {
+      "id": "understand",
+      "title": "Understand the contract",
+      "brief": "Make SQLite reservation retries durable and keep request outcome consistent with stock. Use Python 3.11 standard-library modules only.",
+      "requirements": [
+        "Preserve RetryInventory(path), seed, available, reserve(request_id, sku, quantity), and close; each instance owns its SQLite connection. Fixture seed occurs before requests; concurrent callers are outside this task.",
+        "Persist the exact request ID, payload and boolean outcome across reopen. Identical retry returns the original outcome without a second debit; changed payload under that ID raises ValueError unchanged.",
+        "A new accepted request decrements once; missing or insufficient stock records False without changing stock. Record request outcome and stock change in one durable transaction.",
+        "Validate non-empty string identifiers and exact positive integer reservation quantities before any change; booleans are invalid. Seed accepts exact non-negative integer stock. Preserve non-blank identifier text exactly."
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Implement the change",
+      "brief": "Preserve the documented interface and explain your choices.",
+      "requirements": [
+        "Preserve valid behavior and exact request identity.",
+        "Make errors leave state unchanged."
+      ]
+    },
+    {
+      "id": "verify",
+      "title": "Verify the behavior",
+      "brief": "Run the authored checks and add one targeted learner regression check.",
+      "requirements": [
+        "Use the disclosed contract and failure cases.",
+        "Explain what the observed checks do not establish."
+      ]
+    },
+    {
+      "id": "debrief",
+      "title": "Defend your decisions",
+      "brief": "Explain your code, evidence and remaining limits.",
+      "requirements": [
+        "Cite concrete code or executed checks.",
+        "Describe one alternative and its trade-off."
+      ]
+    }
+  ],
+  "rubric": [
+    {
+      "id": "retry-identity",
+      "name": "Durable request identity",
+      "description": "Keep exact retry identity and payload conflict semantics.",
+      "anchors": {
+        "strong": "Persists both success and failure outcomes, reproduces retries after reopen and rejects conflicts.",
+        "developing": "Handles successful retry in memory but loses history or misses rejected identity.",
+        "needsWork": "Debits again or silently changes a request payload."
+      }
+    },
+    {
+      "id": "retry-consistency",
+      "name": "Atomic failure consistency",
+      "description": "Keep stock and outcome in the same durable transaction.",
+      "anchors": {
+        "strong": "Explains the transaction boundary and leaves state consistent across errors.",
+        "developing": "Uses durable writes but cannot justify their combined failure behavior.",
+        "needsWork": "Records success without a debit or debits without a matching durable outcome."
+      }
+    },
+    {
+      "id": "retry-verification",
+      "name": "Retry regression evidence",
+      "description": "Test reopen, conflict and rejected identity.",
+      "anchors": {
+        "strong": "Adds focused checks for durable retry and explains why sequential tests do not establish concurrency.",
+        "developing": "Checks only same-process successful retry.",
+        "needsWork": "Infers persistence or atomic failure safety from a single normal request."
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "stock-retries-probe-1",
+      "stageId": "debrief",
+      "competencyId": "retry-identity",
+      "question": "How does a reopened connection know whether a request already happened?"
+    },
+    {
+      "id": "stock-retries-probe-2",
+      "stageId": "debrief",
+      "competencyId": "retry-consistency",
+      "question": "What partial state could appear if you commit the debit and result separately?"
+    },
+    {
+      "id": "stock-retries-probe-3",
+      "stageId": "debrief",
+      "competencyId": "retry-verification",
+      "question": "Which failure and reopen check would catch a duplicate debit?"
+    }
+  ],
+  "hints": [
+    "Separate retry identity from the resource being reserved.",
+    "A failed outcome still belongs to an exact request payload.",
+    "Put stock modification and new request outcome in one transaction; replay should read the prior outcome."
+  ],
+  "tests": [
+    {
+      "id": "stock-retries-public",
+      "title": "Public contract checks",
+      "file": "tests/test_public.py",
+      "visible": true,
+      "timeoutSeconds": 10
+    },
+    {
+      "id": "stock-retries-protected",
+      "title": "Protected contract and edge checks",
+      "file": "tests/test_protected.py",
+      "visible": false,
+      "timeoutSeconds": 20
+    }
+  ],
+  "drills": [
+    {
+      "id": "stock-retries-drill-1",
+      "title": "Durable request identity",
+      "competencyId": "retry-identity",
+      "lesson": "Keep exact retry identity and payload conflict semantics.",
+      "exercise": "How does a reopened connection know whether a request already happened? Write one small counterexample and a regression check."
+    },
+    {
+      "id": "stock-retries-drill-2",
+      "title": "Atomic failure consistency",
+      "competencyId": "retry-consistency",
+      "lesson": "Keep stock and outcome in the same durable transaction.",
+      "exercise": "What partial state could appear if you commit the debit and result separately? Write one small counterexample and a regression check."
+    },
+    {
+      "id": "stock-retries-drill-3",
+      "title": "Retry regression evidence",
+      "competencyId": "retry-verification",
+      "lesson": "Test reopen, conflict and rejected identity.",
+      "exercise": "Which failure and reopen check would catch a duplicate debit? Write one small counterexample and a regression check."
+    }
+  ],
+  "rights": "Original Engineering Foundry preparation content; retained as proprietary project material. No claim of affiliation with an interview vendor.",
+  "runtime": {
+    "image": "python:3.11-slim",
+    "timeoutSeconds": 25,
+    "memoryMb": 256
+  }
+}
