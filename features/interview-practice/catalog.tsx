@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Clock3, Code2, Search, Mic, Check } from "lucide-react";
 import type { PublicScenario, PracticeMode } from "@/lib/interview-practice/types";
 import { Dialog, Empty, ErrorNotice, Loading } from "@/components/ui";
-import { api, ensureIdentity, requestId } from "./client";
+import { api, ApiError, ensureIdentity, requestId } from "./client";
 import type { ScenarioResponse, SessionResponse, Capabilities } from "./contracts";
 import { usePreferences } from "./preferences";
+import { readPendingRequests, writePendingRequests, type PendingRequest } from "./recovery";
 
 export function PracticeCatalog() {
   const [data, setData] = useState<ScenarioResponse | null>(null);
@@ -45,19 +46,64 @@ function SetupDialog({ scenario, capabilities, onClose }: { scenario: PublicScen
   const [voice, setVoice] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [interrupted, setInterrupted] = useState(false);
+  const [initializing, setInitializing] = useState(true);
+  const [originalTitle, setOriginalTitle] = useState(scenario.title);
+  const [originalVersion, setOriginalVersion] = useState(scenario.version);
+  const pendingStart = useRef<PendingRequest | null>(null);
+  const ownerRef = useRef<string | null>(null);
+  const restoreStart = useCallback((record: PendingRequest) => {
+    const input = JSON.parse(record.payload);
+    pendingStart.current = record; setInterrupted(true); setMode(input.mode); setRole(input.role); setLevel(input.level); setMinutes(input.targetMinutes); setSkills(input.skills); setAiHelp(input.aiHelp); setVoice(input.voice); setOriginalTitle(record.title || "Your interrupted session"); setOriginalVersion(record.scenarioVersion || "saved");
+  }, []);
+  useEffect(() => {
+    let live = true;
+    ensureIdentity().then(auth => {
+      if (!live) return;
+      ownerRef.current = auth.user.id;
+      const pending = readPendingRequests(auth.user.id, "creation").get("create");
+      if (pending) restoreStart(pending);
+    }).catch((e: Error) => { if (live) setError(e.message); }).finally(() => { if (live) setInitializing(false); });
+    return () => { live = false; };
+  }, [restoreStart]);
   async function start(e: React.FormEvent) {
+    if (busy || initializing) { e.preventDefault(); return; }
     e.preventDefault(); setBusy(true); setError("");
-    try { await ensureIdentity(); const result = await api<SessionResponse>("/sessions", { method: "POST", body: JSON.stringify({ scenarioId: scenario.id, mode, role, level, skills, targetMinutes: minutes, aiHelp, voice, requestId: requestId() }) }); router.push(`/interview-practice/${result.session.id}`); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not start practice."); setBusy(false); }
+    let wasPending = Boolean(pendingStart.current); let sent = false;
+    try {
+      const auth = await ensureIdentity();
+      if (pendingStart.current && ownerRef.current !== auth.user.id) throw new Error("Your account changed. Close and reopen setup to recover requests for the signed-in account.");
+      ownerRef.current = auth.user.id;
+      if (!pendingStart.current) {
+        const stored = readPendingRequests(auth.user.id, "creation").get("create");
+        if (stored) { wasPending = true; restoreStart(stored); throw new Error("An interrupted start is waiting. Retry to recover that session before starting another."); }
+      }
+      // A lost acknowledgement is not a failed admission. Keep the complete
+      // original request until the server confirms its outcome.
+      pendingStart.current ??= { payload: JSON.stringify({ scenarioId: scenario.id, mode, role, level, skills, targetMinutes: minutes, aiHelp, voice, requestId: requestId() }), uncertain: false, createdAt: new Date().toISOString(), title: scenario.title, scenarioVersion: scenario.version };
+      writePendingRequests(auth.user.id, "creation", new Map([["create", pendingStart.current]])); sent = true;
+      const result = await api<SessionResponse>("/sessions", { method: "POST", body: pendingStart.current.payload });
+      if (!result.session?.id) throw new Error("The start response was interrupted. Retry to recover the same session.");
+      writePendingRequests(auth.user.id, "creation", new Map());
+      pendingStart.current = null; setInterrupted(false); router.push(`/interview-practice/${result.session.id}`);
+    } catch (e) {
+      if ((!sent && !wasPending) || (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408 && !wasPending)) {
+        try { if (ownerRef.current) writePendingRequests(ownerRef.current, "creation", new Map()); pendingStart.current = null; } catch { /* Keep the original retry if storage cleanup is unavailable. */ }
+      }
+      else if (pendingStart.current) pendingStart.current.uncertain = true;
+      setInterrupted(pendingStart.current !== null); setError(e instanceof Error ? e.message : "Could not start practice."); setBusy(false);
+    }
   }
-  return <Dialog title="Set up your session" onClose={onClose}><form onSubmit={start}><p className="dialog-description">{scenario.title} <span className="muted">· Version {scenario.version}</span></p>
+  return <Dialog title="Set up your session" onClose={() => { if (!busy) onClose(); }}><form onSubmit={start}><p className="dialog-description">{originalTitle} <span className="muted">· Version {originalVersion}</span></p><fieldset disabled={busy || interrupted || initializing} aria-label="Session settings">
     <fieldset className="mode-options"><legend>Mode</legend><label className={mode === "practice" ? "choice selected" : "choice"}><input type="radio" name="mode" checked={mode === "practice"} onChange={() => setMode("practice")} /><span><strong>Practice</strong><span>Hints, pauses, and time to explore.</span></span></label><label className={mode === "simulation" ? "choice selected" : "choice"}><input type="radio" name="mode" checked={mode === "simulation"} onChange={() => setMode("simulation")} /><span><strong>Simulation</strong><span>Set your help policy before starting.</span></span></label></fieldset>
-    <div className="form-grid"><label>Role<select value={role} onChange={(e) => setRole(e.target.value)}><option>Backend engineer</option><option>Full stack engineer</option><option>Platform engineer</option></select></label><label>Target level<select value={level} onChange={(e) => setLevel(e.target.value)}>{[...new Set([scenario.level, "Junior", "Mid-level", "Senior"])].map((l) => <option key={l}>{l}</option>)}</select></label><label>Target duration (advisory)<select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>{[...new Set([30, 45, 60, scenario.durationMinutes])].sort((a,b) => a-b).map((n) => <option value={n} key={n}>{n} minutes</option>)}</select></label><label>Conversation<select value={voice ? "voice" : "text"} onChange={(e) => setVoice(e.target.value === "voice")}><option value="text">Text</option><option value="voice" disabled={!capabilities.voice}>Voice {capabilities.voice ? "" : "— not configured"}</option></select></label></div>
-    <p className="setup-context">The task uses its published requirements and rubric. Your selections record your preparation goals.</p><fieldset className="skill-options"><legend>Skills to focus on</legend>{scenario.tags.map((tag) => <label key={tag}><input type="checkbox" checked={skills.includes(tag)} onChange={(e) => setSkills(e.target.checked ? [...skills, tag] : skills.filter((s) => s !== tag))} />{tag}</label>)}</fieldset>
+    <div className="form-grid"><label>Role<select value={role} onChange={(e) => setRole(e.target.value)}><option>Backend engineer</option><option>Full stack engineer</option><option>Platform engineer</option></select></label><label>Target level<select value={level} onChange={(e) => setLevel(e.target.value)}>{[...new Set([level, scenario.level, "Junior", "Mid-level", "Senior"])].map((l) => <option key={l}>{l}</option>)}</select></label><label>Target duration (advisory)<select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>{[...new Set([minutes, 30, 45, 60, scenario.durationMinutes])].sort((a,b) => a-b).map((n) => <option value={n} key={n}>{n} minutes</option>)}</select></label><label>Conversation<select value={voice ? "voice" : "text"} onChange={(e) => setVoice(e.target.value === "voice")}><option value="text">Text</option><option value="voice" disabled={!capabilities.voice}>Voice {capabilities.voice ? "" : "— not configured"}</option></select></label></div>
+    <p className="setup-context">The task uses its published requirements and rubric. Your selections record your preparation goals.</p><fieldset className="skill-options"><legend>Skills to focus on</legend>{[...new Set([...scenario.tags, ...skills])].map((tag) => <label key={tag}><input type="checkbox" checked={skills.includes(tag)} onChange={(e) => setSkills(e.target.checked ? [...skills, tag] : skills.filter((s) => s !== tag))} />{tag}</label>)}</fieldset>
     <label className="checkbox-row"><input type="checkbox" checked={aiHelp} onChange={(e) => setAiHelp(e.target.checked)} /><span><strong>Allow the coding assistant</strong><span>{capabilities.ai ? "Ask questions or preview proposed edits. Your use of help is recorded." : "AI is not configured. Authored interview questions and deterministic feedback remain available."}</span></span></label>
+    </fieldset>
     <div className="setup-rules"><p><Check size={16} aria-hidden="true" />Code and committed answers are saved privately for your practice account.</p><p><Check size={16} aria-hidden="true" />Finish coding starts the debrief. Final submit generates your report.</p><p><Mic size={16} aria-hidden="true" />No webcam or screen recording. Raw audio playback is off.</p></div>
     {capabilities.coaching === false && <p className="role-note">{capabilities.details?.coaching || "AI coaching is unavailable. Final submission preserves your evidence in an observation-only report; it does not assess your skills."}</p>}
+    {interrupted && <p className="role-note" role="status">The start request may have completed. Retry to recover the same session, or review your saved attempts. Your original settings stay fixed until its outcome is confirmed. This tab retains the pending request when you close setup or reload.</p>}
     {error && <ErrorNotice message={error} />}
-    <div className="dialog-actions"><button type="button" className="button" onClick={onClose} disabled={busy}>Cancel</button><button className="button primary" disabled={busy}>{busy ? "Starting…" : "Start session"}<ArrowRight size={16} /></button></div>
+    <div className="dialog-actions">{interrupted && <Link className="button" href="/history">Review saved attempts</Link>}<button type="button" className="button" onClick={onClose} disabled={busy}>{interrupted ? "Close setup" : "Cancel"}</button><button className="button primary" disabled={busy || initializing}>{busy ? "Starting…" : initializing ? "Checking saved request…" : interrupted ? "Retry start" : "Start session"}<ArrowRight size={16} /></button></div>
   </form></Dialog>;
 }
