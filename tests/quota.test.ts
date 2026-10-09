@@ -116,13 +116,24 @@ describe('atomic AI and speech quota admission across UTC boundaries', () => {
     await context.service.deleteAccount('owner-a',{ requestId: randomUUID() }); expect(await context.service.listSessions('owner-a')).toEqual([]);
     const recreated = await context.create(); await expect(context.request(recreated.id)).rejects.toMatchObject({ code: 'quota' }); expect(totals((await context.store.read()).ledger).userDailyUsd).toBe(.08);
   });
-  const voiceConfig: VoiceConfig = { apiKey: 'synthetic-not-a-key', sttUsdPerMinute: .0043, ttsUsdPerThousandChars: .03, sessionMinutes: 20, userDailyMinutes: 60, globalDailyMinutes: 600, sessionUsd: 10, userDailyUsd: .1, globalDailyUsd: 100 };
+  const voiceConfig: VoiceConfig = { apiKey: 'synthetic-not-a-key', sttUsdPerMinute: .0043, ttsUsdPerThousandChars: .03, sessionMinutes: 20, userDailyMinutes: 60, globalDailyMinutes: 600, sessionUsd: 10, userDailyUsd: .1, userMonthlyUsd: 100, globalDailyUsd: 100 };
   const voiceInput = (sessionId: string, ownerId = 'owner-a') => ({ sessionId, ownerId, requestId: randomUUID(), operation: 'transcribe' as const, fingerprint: 'a'.repeat(64), seconds: 1, characters: 0, usd: .08 });
   it('uses the same USD helper for voice so late AI refunds cannot fund extra speech', async () => {
     const context = setup(prior), { session } = await boundarySettlement(context), first = await reserveVoice(context.store,voiceConfig,voiceInput(session.id),context.clock.value);
     await settleVoice(context.store,first,false,context.clock.value);
     await expect(reserveVoice(context.store,voiceConfig,voiceInput(session.id),context.clock.value)).rejects.toMatchObject({ code: 'quota' });
     expect(totals((await context.store.read()).ledger).userDailyUsd).toBe(.08);
+  });
+  it('enforces shared monthly speech spend across days independently of the daily limit', async () => {
+    const context = setup('2026-10-30T12:00:00.000Z'), session = await context.create();
+    await context.request(session.id); const claim = await context.service.claimJob('fixture-worker');
+    await context.service.completeJob(claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Synthetic answer.', actualUsd: .08 });
+    context.clock.value = new Date('2026-10-31T12:00:00.000Z');
+    const config = { ...voiceConfig, userDailyUsd: 10, userMonthlyUsd: .1 };
+    await expect(reserveVoice(context.store, config, voiceInput(session.id), context.clock.value)).rejects.toMatchObject({ code: 'quota' });
+    expect(totals((await context.store.read()).ledger, context.clock.value.toISOString())).toMatchObject({ userDailyUsd: 0, userMonthlyUsd: .08 });
+    context.clock.value = new Date(next);
+    await expect(reserveVoice(context.store, config, voiceInput(session.id), context.clock.value)).resolves.toHaveProperty('key');
   });
   it('keeps the shared global speech cap across owners despite prior-window AI settlements', async () => {
     const context = setup(prior); await boundarySettlement(context); const a = await context.create('owner-b'), b = await context.create('owner-c'), config = { ...voiceConfig,userDailyUsd: 10,globalDailyUsd: .1 };

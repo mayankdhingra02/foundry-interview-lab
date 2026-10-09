@@ -78,6 +78,9 @@ describe('durable worker integration', () => {
     const results = await Promise.allSettled([service.requestAssistant('a', a.id, { requestId: requestId(), expectedRevision: a.revision, mode: 'ask', message: 'Help' }), service.requestAssistant('b', b.id, { requestId: requestId(), expectedRevision: b.revision, mode: 'ask', message: 'Help' })]);
     expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter(r => r.status === 'rejected')).toHaveLength(1);
+    // Once claimed, inference may have incurred a charge; deletion must keep
+    // that global commitment. Unclaimed queued work is safely released.
+    expect(await service.claimJob('fixture-worker')).not.toBeNull();
     await service.deleteAccount('a', { requestId: requestId() }); await service.deleteAccount('b', { requestId: requestId() });
     const c = (await service.createSession('c', { scenarioId: scenario.id, requestId: requestId() })).session;
     await expect(service.requestAssistant('c', c.id, { requestId: requestId(), expectedRevision: c.revision, mode: 'ask', message: 'Help' })).rejects.toMatchObject({ code: 'quota' });

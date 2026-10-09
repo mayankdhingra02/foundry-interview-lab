@@ -1,7 +1,7 @@
 export type VoiceConfig = {
   apiKey: string; sttUsdPerMinute: number; ttsUsdPerThousandChars: number;
   sessionMinutes: number; userDailyMinutes: number; globalDailyMinutes: number;
-  sessionUsd: number; userDailyUsd: number; globalDailyUsd: number;
+  sessionUsd: number; userDailyUsd: number; userMonthlyUsd: number; globalDailyUsd: number;
 };
 
 // These are admission ceilings, not a claim about an account's final invoice.
@@ -22,6 +22,7 @@ export function voiceConfig(env: Record<string, string | undefined> = process.en
     globalDailyMinutes: positive('VOICE_MAX_GLOBAL_DAILY_MINUTES', 1, 1_000_000),
     sessionUsd: positive('MAX_SESSION_USD', 0.01, 100),
     userDailyUsd: positive('MAX_DAILY_USER_USD', 0.01, 10_000),
+    userMonthlyUsd: positive('MAX_MONTHLY_USER_USD', 0.01, 1_000_000),
     globalDailyUsd: positive('VOICE_MAX_GLOBAL_DAILY_USD', 0.01, 100_000)
   };
   return Object.values(config).every(value => typeof value === 'string' || Number.isFinite(value)) ? config : null;

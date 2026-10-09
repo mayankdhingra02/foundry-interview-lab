@@ -14,7 +14,7 @@ import type { VoiceConfig } from '../lib/voice/config';
 // DATABASE_URL, uses a hosted account, or calls a speech provider.
 const enabled = process.env.RUN_POSTGRES_INTEGRATION === '1';
 const owner = '73efbd73-729b-4b58-80ab-8c67240ef3db', other = '51c77415-21f8-4305-b165-c29eb5d3c829';
-const config: VoiceConfig = { apiKey: 'not-used', sttUsdPerMinute: .0043, ttsUsdPerThousandChars: .03, sessionMinutes: 20, userDailyMinutes: 60, globalDailyMinutes: 1, sessionUsd: 1, userDailyUsd: 5, globalDailyUsd: 50 };
+const config: VoiceConfig = { apiKey: 'not-used', sttUsdPerMinute: .0043, ttsUsdPerThousandChars: .03, sessionMinutes: 20, userDailyMinutes: 60, globalDailyMinutes: 1, sessionUsd: 1, userDailyUsd: 5, userMonthlyUsd: 50, globalDailyUsd: 50 };
 describe.skipIf(!enabled)('voice admission on disposable PostgreSQL without speech calls', () => {
   let pool: Pool, servicePool: Pool, store: PostgresPracticeStore, service: SessionService;
   let container = '';
