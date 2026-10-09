@@ -1,0 +1,16 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { ArrowRight } from "lucide-react";
+import type { RubricLevel } from "@/lib/interview-practice/types";
+import { Empty, ErrorNotice, Loading } from "@/components/ui";
+import { api, ensureIdentity, formatDate } from "./client";
+
+type ProgressResponse = { skills: Array<{ id: string; name: string; observations: number; lastObservedAt: string; level: RubricLevel; levels: Record<RubricLevel, number> }>; recommendations: Array<{ scenarioId: string; title: string; reason: string; fresh: boolean }> };
+export function PracticeProgress() {
+  const [data, setData] = useState<ProgressResponse | null>(null); const [error, setError] = useState("");
+  function load() { ensureIdentity().then(() => api<ProgressResponse>("/progress")).then((result) => { setData(result); setError(""); }).catch((e) => setError(e.message)); }
+  useEffect(() => { load(); }, []);
+  return <><div className="page-heading"><div><h1>Your practice progress</h1><p>A provisional view of skills observed in your completed attempts.</p></div><Link className="button primary" href="/interview-practice">Find your next task <ArrowRight size={16} /></Link></div><div className="progress-explanation"><h2>Look for evidence across attempts</h2><p>One attempt is a limited observation. Review the skill, the assistance used, and whether the task was fresh. These findings describe practice work and do not predict interview outcomes.</p></div>{error && <ErrorNotice message={error} action={<button className="button" onClick={load}>Try again</button>} />}{!data && !error && <Loading>Loading observed skills…</Loading>}{data?.skills.length === 0 && <Empty title="No completed observations yet"><p>Finish an attempt and its debrief to build your first skill observations.</p><Link className="button" href="/history">View in-progress sessions <ArrowRight size={16} /></Link></Empty>}{data && data.skills.length > 0 && <section><h2 className="section-title">Observed skills</h2><div className="table-scroll"><table><thead><tr><th scope="col">Skill</th><th scope="col">Latest finding</th><th scope="col">Observations</th><th scope="col">Last observed</th><th scope="col">Finding history</th></tr></thead><tbody>{data.skills.map((skill) => <tr key={skill.id}><th scope="row">{skill.name}</th><td>{skill.level}</td><td>{skill.observations}</td><td>{formatDate(skill.lastObservedAt)}</td><td className="finding-history">{Object.entries(skill.levels).filter(([, count]) => count > 0).map(([level, count]) => <span key={level}>{level}: {count}</span>)}</td></tr>)}</tbody></table></div></section>}{data && data.recommendations.length > 0 && <section className="recommendations"><h2>Suggested next practice</h2>{data.recommendations.map((recommendation) => <article key={recommendation.scenarioId}><div><h3>{recommendation.title}</h3><p>{recommendation.reason}</p><span className="muted">{recommendation.fresh ? "Unseen task" : "Repeated task · useful for deliberate practice"}</span></div><Link className="button" href={`/interview-practice?scenario=${encodeURIComponent(recommendation.scenarioId)}`}>Set up practice <ArrowRight size={16} /></Link></article>)}</section>}</>;
+}
