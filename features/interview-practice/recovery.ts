@@ -1,13 +1,25 @@
 "use client";
 
+import { ApiError } from "./client";
+import type { SessionView } from "@/lib/interview-practice/types";
+
 export const pendingStoragePrefix = "foundry-practice-pending:";
 export type PendingRequest = { payload: string; uncertain: boolean; createdAt: string; title?: string; scenarioVersion?: string };
 export type PendingIntent = { path: string; body: Record<string, unknown>; operationRequestId?: string };
-const paths = new Set(["commands", "hints", "runs", "assistant", "turns", "edit-decisions", "drills", "reports", "interaction"]);
+const paths = new Set(["commands", "hints", "runs", "assistant", "turns", "edit-decisions", "drills", "reports", "interaction", "cancel-job"]);
 const maxEntries = 20;
 const maxStorageCharacters = 160_000;
+const replayWindowMs = 30 * 24 * 60 * 60 * 1000;
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown, max: number) => typeof value === "string" && value.length > 0 && value.length <= max;
+
+export function isDeletedRequest(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 410 && object(error.detail) && object(error.detail.error) && error.detail.error.code === "request_deleted";
+}
+export function pendingReplayExpired(pending: Pick<PendingRequest, "createdAt">, now = Date.now()): boolean {
+  const created = Date.parse(pending.createdAt);
+  return !Number.isFinite(created) || created > now || now - created >= replayWindowMs;
+}
 
 function storageKey(ownerId: string, scope: string) {
   if (!text(ownerId, 200) || !text(scope, 200)) throw new Error("Sign in again before recovering a pending request.");
@@ -21,7 +33,7 @@ export function pendingIntent(value: string): PendingIntent | null {
   } catch { return null; }
 }
 function validEntry(intent: string, value: unknown, scope: string): value is PendingRequest {
-  if (!object(value) || !text(value.payload, 20_000) || !text(value.createdAt, 40) || !Number.isFinite(Date.parse(String(value.createdAt))) || (value.title !== undefined && !text(value.title, 200)) || (value.scenarioVersion !== undefined && !text(value.scenarioVersion, 30))) return false;
+  if (!object(value) || !text(value.payload, 20_000) || typeof value.createdAt !== "string" || value.createdAt.length > 40 || (value.title !== undefined && !text(value.title, 200)) || (value.scenarioVersion !== undefined && !text(value.scenarioVersion, 30))) return false;
   try {
     const wire: unknown = JSON.parse(String(value.payload));
     if (!object(wire) || !text(wire.requestId, 128) || String(wire.requestId).length < 8) return false;
@@ -41,7 +53,8 @@ export function readPendingRequests(ownerId: string, scope: string): Map<string,
     const raw = sessionStorage.getItem(key);
     if (!raw) return new Map();
     if (raw.length > maxStorageCharacters) { sessionStorage.removeItem(key); return new Map(); }
-    const parsed: unknown = JSON.parse(raw);
+    const source: unknown = JSON.parse(raw);
+    const parsed: unknown = Array.isArray(source) ? source.map(row => Array.isArray(row) && object(row[1]) ? [row[0], { ...row[1], createdAt: typeof row[1].createdAt === "string" && row[1].createdAt.length <= 40 ? row[1].createdAt : "" }] : row) : source;
     if (!Array.isArray(parsed) || parsed.length > maxEntries || parsed.some(row => !Array.isArray(row) || row.length !== 2 || !text(row[0], 12_000) || !validEntry(row[0], row[1], scope))) { sessionStorage.removeItem(key); return new Map(); }
     // Browser storage is untrusted. It supplies an explicit retry candidate,
     // never account authorization or an automatically dispatched request.
@@ -68,6 +81,16 @@ export function clearSessionPracticeRecovery(ownerId: string, sessionId: string)
   try { sessionStorage.removeItem(storageKey(ownerId, `session:${sessionId}`)); } catch { complete = false; }
   try { localStorage.removeItem(`foundry-practice-draft:${sessionId}`); } catch { complete = false; }
   return complete;
+}
+export function reconcilePendingCreation(ownerId: string, sessions: Pick<SessionView, "events">[]): boolean {
+  const pending = readPendingRequests(ownerId, "creation").get("create");
+  if (!pending) return false;
+  const requestId = JSON.parse(pending.payload).requestId;
+  if (!sessions.some(session => session.events.some(event => event.type === "session.started" && event.requestId === requestId))) return false;
+  // Only an authenticated owned-session response supplies this correlation.
+  // Matching a title, timestamp, or configuration would not prove admission.
+  writePendingRequests(ownerId, "creation", new Map());
+  return true;
 }
 export function clearBrowserPracticeRecovery(): boolean {
   let complete = true;
