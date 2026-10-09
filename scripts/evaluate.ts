@@ -29,7 +29,7 @@ const annotations = annotationPath ? annotationSchema.parse(JSON.parse(await rea
 const templatePath = value('--annotation-template');
 if (templatePath) await writeJson(templatePath, annotationTemplate(recipes.version, attempts, candidates?.candidates));
 const exportPath = value('--export-attempts');
-if (exportPath) await writeJson(exportPath, { benchmarkVersion: recipes.version, provenance: recipes.provenance, attempts: attempts.map(attempt => ({ caseId: attempt.recipe.id, reviewFocus: attempt.recipe.reviewFocus, scenario: { id: attempt.scenario.id, version: attempt.scenario.version, rubric: attempt.scenario.rubric, probes: attempt.scenario.probes, drills: attempt.scenario.drills }, session: attempt.session })) });
+if (exportPath) await writeJson(exportPath, { benchmarkVersion: recipes.version, provenance: recipes.provenance, attempts: attempts.map(attempt => ({ caseId: attempt.recipe.id, reviewFocus: attempt.recipe.reviewFocus, fixtureIdentity: attempt.fixtureIdentity, executionContext: attempt.executionContext, scenario: { id: attempt.scenario.id, version: attempt.scenario.version, rubric: attempt.scenario.rubric, probes: attempt.scenario.probes, drills: attempt.scenario.drills }, session: attempt.session })) });
 const regressions = await runDeterministicBenchmark(attempts);
 const release = calculateReleaseGate(recipes.version, attempts, regressions, candidates, annotations);
 const result = { generatedAt: new Date().toISOString(), provenance: recipes.provenance, scenarios: listScenarios().map(scenario => ({ id: scenario.id, version: scenario.version, digest: digest(getScenario(scenario.id)!) })), regressions, release };

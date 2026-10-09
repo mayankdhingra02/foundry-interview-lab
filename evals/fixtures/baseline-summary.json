@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-09T20:22:29.769Z",
+  "generatedAt": "2026-10-09T22:23:05.144Z",
   "provenance": "Developer-authored regression attempts using original Foundry scenario assets. Dialogue and edit decisions are synthetic; captured code-execution observations are identified separately. No learner data or expert labels.",
   "scenarios": [
     {
@@ -115,6 +115,26 @@
       "detail": "Application contract passed; this is not model-quality evidence."
     },
     {
+      "id": "frozen-evidence:money-partial-rounding",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:compatibility-alternative-unexecuted",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:inventory-interrupted-before-run",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:rollup-interrupted-during-run",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
       "id": "reject-unknown-evidence",
       "passed": true,
       "detail": "Application contract passed; this is not model-quality evidence."
@@ -196,7 +216,7 @@
     }
   ],
   "release": {
-    "benchmarkVersion": "foundry-regression-2026-10-09-v1",
+    "benchmarkVersion": "foundry-regression-2026-10-09-v2",
     "scope": "AI feedback and interviewer benchmark; operational, accessibility, and learning-value gates remain separate",
     "status": "pending",
     "thresholds": {
@@ -208,10 +228,10 @@
       "fabricatedTestResults": 0,
       "criticalSolutionLeaks": 0
     },
-    "attemptCount": 17,
+    "attemptCount": 21,
     "deterministic": {
-      "passed": 33,
-      "total": 33
+      "passed": 37,
+      "total": 37
     },
     "metrics": {
       "evidenceResolution": null,
@@ -230,9 +250,9 @@
     },
     "blockingReasons": [],
     "pendingReasons": [
-      "Expand the curated set from 17 to at least 40 attempts, including held-out variants and consented pilot examples.",
-      "Recorded, validated model outputs are available for 0/17 attempts. No live model benchmark is inferred from fixtures.",
-      "Two independent human reviews and matching adjudication are complete for 0/17 candidate outputs.",
+      "Expand the curated set from 21 to at least 40 attempts, including held-out variants and consented pilot examples.",
+      "Recorded, validated model outputs are available for 0/21 attempts. No live model benchmark is inferred from fixtures.",
+      "Two independent human reviews and matching adjudication are complete for 0/21 candidate outputs.",
       "No independently reviewed follow-up questions are available."
     ]
   }

@@ -2,18 +2,27 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { getScenario, listScenarios } from '../lib/content/scenarios';
-import { digest, toPublicScenario } from '../lib/interview-practice/domain';
+import { digest, toPublicScenario, validateFiles } from '../lib/interview-practice/domain';
 import { buildEvidence, coachOutputSchema, freezeEvidence, interviewProposalSchema, validateInterviewProposal, validateReport } from '../lib/interview-practice/evidence';
 import type { CoachOutput, InterviewProposal, RubricLevel, RunExecution, Scenario, Session } from '../lib/interview-practice/types';
 import { MemoryPracticeStore } from '../lib/server/store';
 import { SessionService } from '../lib/server/session-service';
 
-const recipeSchema = z.object({ id: z.string().min(1), scenarioId: z.string().min(1), variant: z.enum(['reference', 'starter']), condition: z.string(), answers: z.array(z.string()), reviewFocus: z.array(z.string()), omitRun: z.boolean().optional(), changeAfterRun: z.boolean().optional(), edit: z.enum(['rejected-correct', 'accepted-bad']).optional() }).strict();
-const recipesSchema = z.object({ version: z.string(), provenance: z.string(), cases: z.array(recipeSchema).min(1) }).strict();
-export type AttemptRecipe = z.infer<typeof recipeSchema>;
-export type CapturedRun = { scenarioId: string; scenarioVersion: string; scenarioDigest: string; variant: 'reference' | 'starter'; snapshotSha256: string; testSuiteDigest: string; recordedAt: string; run: RunExecution };
+const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+const fixtureVersion = z.string().max(32).regex(/^\d+\.\d+\.\d+$/);
+const executionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('captured'), captureDigest: sha256 }).strict(),
+  z.object({ kind: z.literal('unexecuted') }).strict(),
+  z.object({ kind: z.literal('interrupted'), phase: z.enum(['before-execution', 'during-execution']), reason: z.enum(['disconnect', 'timeout', 'worker-restart']) }).strict(),
+]);
+export const attemptRecipeSchema = z.object({ id: z.string().min(1).max(100), scenarioId: z.string().min(1).max(100), scenarioVersion: fixtureVersion.optional(), variant: z.enum(['reference', 'starter', 'custom']), snapshot: z.object({ version: fixtureVersion, files: z.record(z.string().max(64_000)), sha256 }).strict().optional(), execution: executionSchema.optional(), condition: z.string().max(100), answers: z.array(z.string().max(6000)).max(20), reviewFocus: z.array(z.string().max(500)).max(20), omitRun: z.boolean().optional(), changeAfterRun: z.boolean().optional(), edit: z.enum(['rejected-correct', 'accepted-bad']).optional() }).strict();
+const recipesSchema = z.object({ version: z.string(), provenance: z.string(), cases: z.array(attemptRecipeSchema).min(1).max(100) }).strict();
+export type AttemptRecipe = z.infer<typeof attemptRecipeSchema>;
+export type CapturedRun = { scenarioId: string; scenarioVersion: string; scenarioDigest: string; variant: 'reference' | 'starter' | 'custom'; snapshotSha256: string; testSuiteDigest: string; recordedAt: string; run: RunExecution };
 export type RuntimeCapture = { version: 1; provenance: 'actual-isolated-docker'; captures: CapturedRun[] };
-export type BenchmarkAttempt = { recipe: AttemptRecipe; scenario: Scenario; session: Session; capturedExecution: boolean };
+export type FixtureIdentity = { version: string; scenarioId: string; scenarioVersion: string; scenarioDigest: string; variant: AttemptRecipe['variant']; snapshotSha256: string; testSuiteDigest: string; digest: string };
+export type ExecutionContext = { kind: 'captured' | 'unexecuted' | 'interrupted'; provenance: 'actual-isolated-docker' | 'developer-authored-state'; captureDigest: string | null; interruption?: { phase: 'before-execution' | 'during-execution'; reason: 'disconnect' | 'timeout' | 'worker-restart' } };
+export type BenchmarkAttempt = { recipe: AttemptRecipe; scenario: Scenario; session: Session; capturedExecution: boolean; fixtureIdentity: FixtureIdentity; executionContext: ExecutionContext };
 export type RegressionResult = { id: string; passed: boolean; detail: string };
 export const THRESHOLDS = { minimumAttempts: 40, evidenceResolution: 1, claimSupport: 0.95, rubricWithinOneBand: 0.85, questionRelevance: 0.9, fabricatedTestResults: 0, criticalSolutionLeaks: 0 } as const;
 
@@ -27,24 +36,51 @@ export async function loadRuntimeCapture(): Promise<RuntimeCapture | null> {
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
 }
 
-/** All dialogue and decisions are authored fixtures; only matching captured run facts are reused. */
-export function materializeAttempt(recipe: AttemptRecipe, capture: RuntimeCapture | null): BenchmarkAttempt {
-  const scenario = getScenario(recipe.scenarioId);
-  if (!scenario) throw new Error(`Unknown benchmark scenario ${recipe.scenarioId}.`);
-  const captured = capture?.captures.find(row => row.scenarioId === scenario.id && row.variant === recipe.variant);
+export const runtimeCaptureDigest = (capture: CapturedRun) => digest(capture);
+
+/** All dialogue and decisions are authored fixtures; only exact captured run facts are reused. */
+export function materializeAttempt(input: AttemptRecipe, capture: RuntimeCapture | null): BenchmarkAttempt {
+  const recipe = attemptRecipeSchema.parse(input);
+  const scenario = getScenario(recipe.scenarioId, recipe.scenarioVersion);
+  if (!scenario) {
+    if (recipe.scenarioVersion && getScenario(recipe.scenarioId)) throw new Error('Benchmark fixture belongs to another scenario version.');
+    throw new Error(`Unknown benchmark scenario ${recipe.scenarioId}.`);
+  }
+  if (recipe.variant === 'custom' && (!recipe.scenarioVersion || !recipe.snapshot || !recipe.execution)) throw new Error('Custom fixtures require a pinned scenario version, versioned snapshot and explicit execution state.');
+  if (recipe.variant !== 'custom' && recipe.snapshot) throw new Error('A custom snapshot must use the custom variant.');
+  if (recipe.execution && (recipe.omitRun !== undefined || recipe.changeAfterRun || recipe.edit)) throw new Error('Explicit execution state cannot be combined with legacy attempt transformations.');
+  const files = validateFiles(recipe.variant === 'custom' ? recipe.snapshot!.files : recipe.variant === 'reference' ? scenario.referenceFiles : scenario.files, scenario);
+  const snapshotSha256 = digest(files), scenarioDigest = digest(scenario), testSuiteDigest = digest(scenario.tests);
+  if (recipe.snapshot && recipe.snapshot.sha256 !== snapshotSha256) throw new Error('Custom fixture snapshot digest does not match its files.');
+  const identity = { version: recipe.snapshot?.version ?? 'legacy-v1', scenarioId: scenario.id, scenarioVersion: scenario.version, scenarioDigest, variant: recipe.variant, snapshotSha256, testSuiteDigest };
+  const fixtureIdentity: FixtureIdentity = { ...identity, digest: digest(identity) };
+  let captured: CapturedRun | undefined;
+  const expectsCapture = recipe.execution?.kind === 'captured' || (!recipe.execution && !recipe.omitRun);
+  if (expectsCapture && capture) {
+    if (capture.version !== 1 || capture.provenance !== 'actual-isolated-docker') throw new Error('Runtime capture lacks actual isolated execution provenance.');
+    const captureDigest = recipe.execution?.kind === 'captured' ? recipe.execution.captureDigest : null;
+    const candidates = captureDigest
+      ? capture.captures.filter(row => runtimeCaptureDigest(row) === captureDigest)
+      : capture.captures.filter(row => row.scenarioId === scenario.id && row.variant === recipe.variant);
+    if (candidates.length > 1) throw new Error('Runtime capture identity is ambiguous; select one immutable capture digest.');
+    captured = candidates[0];
+    if (captured && (captured.scenarioId !== scenario.id || captured.scenarioVersion !== scenario.version || captured.scenarioDigest !== scenarioDigest || captured.snapshotSha256 !== snapshotSha256 || captured.testSuiteDigest !== testSuiteDigest || !/^sha256:[a-f0-9]{64}$/.test(captured.run.runtimeDigest || ''))) throw new Error(`Captured execution no longer matches ${recipe.id}; recapture the reviewed runtime.`);
+  }
+  if (recipe.execution?.kind === 'captured' && !captured) throw new Error('The explicit runtime capture digest was not found.');
+  const executionContext: ExecutionContext = captured
+    ? { kind: 'captured', provenance: 'actual-isolated-docker', captureDigest: runtimeCaptureDigest(captured) }
+    : { kind: recipe.execution?.kind === 'interrupted' ? 'interrupted' : 'unexecuted', provenance: 'developer-authored-state', captureDigest: null, ...(recipe.execution?.kind === 'interrupted' ? { interruption: { phase: recipe.execution.phase, reason: recipe.execution.reason } } : {}) };
   const runTime = Date.parse(captured?.recordedAt ?? '2026-10-09T12:00:00.000Z');
   if (!Number.isFinite(runTime)) throw new Error('Captured execution timestamp is invalid.');
   const at = (offset: number) => new Date(runTime + offset).toISOString();
   const now = at(60_000);
-  const files = structuredClone(recipe.variant === 'reference' ? scenario.referenceFiles : scenario.files);
   const snapshot = { id: `${recipe.id}-snapshot-1`, sequence: 1, createdAt: at(-60_000), sha256: digest(files), files: structuredClone(files) };
   const session: Session = {
     id: `fixture-${recipe.id}`, ownerId: 'developer-fixture', scenarioId: scenario.id, scenarioVersion: scenario.version, scenarioDigest: digest(scenario), scenario: toPublicScenario(scenario), mode: 'simulation',
     configuration: { role: 'Backend engineer', level: scenario.level, skills: [...scenario.tags], targetMinutes: scenario.durationMinutes, aiHelp: true, accommodations: [] }, lifecycle: 'reviewing', stageId: 'debrief', revision: 1,
     files, snapshots: [snapshot], codeFrozenSnapshotId: snapshot.id, frozenEvidence: null, events: [], turns: recipe.answers.map((text, index) => ({ id: `${recipe.id}-answer-${index}`, role: 'learner', text, source: 'typed', createdAt: at(1000 + index * 1000), evidenceIds: [] })), runs: [], jobs: [], assistantMessages: [], editProposals: [], reports: [], usage: { reservedUsd: 0, spentUsd: 0, uncertainUsd: 0, runs: 0, aiCalls: 0 }, createdAt: snapshot.createdAt, updatedAt: now, hintsOpened: 0, completedDrillIds: [], promptExposure: 'fresh',
   };
-  if (captured && (capture?.provenance !== 'actual-isolated-docker' || captured.scenarioVersion !== scenario.version || captured.scenarioDigest !== digest(scenario) || captured.snapshotSha256 !== snapshot.sha256 || captured.testSuiteDigest !== digest(scenario.tests) || !/^sha256:[a-f0-9]{64}$/.test(captured.run.runtimeDigest || ''))) throw new Error(`Captured execution no longer matches ${recipe.id}; recapture the reviewed runtime.`);
-  if (captured && !recipe.omitRun) session.runs.push({ ...structuredClone(captured.run), id: `${recipe.id}-run`, jobId: `${recipe.id}-run-job`, snapshotId: snapshot.id, snapshotSha256: snapshot.sha256, testSuiteDigest: captured.testSuiteDigest, createdAt: captured.recordedAt });
+  if (captured) session.runs.push({ ...structuredClone(captured.run), id: `${recipe.id}-run`, jobId: `${recipe.id}-run-job`, snapshotId: snapshot.id, snapshotSha256: snapshot.sha256, testSuiteDigest: captured.testSuiteDigest, createdAt: captured.recordedAt });
   if (recipe.changeAfterRun) {
     const path = Object.keys(files).find(path => path.endsWith('.py'))!;
     files[path] += '\n# A later acknowledged edit: this snapshot has not been executed.\n';
@@ -56,7 +92,7 @@ export function materializeAttempt(recipe: AttemptRecipe, capture: RuntimeCaptur
     session.editProposals.push({ id: `${recipe.id}-edit`, jobId: `${recipe.id}-assistant-job`, baseSnapshotId: snapshot.id, baseSha256: snapshot.sha256, files: structuredClone(recipe.edit === 'rejected-correct' ? scenario.referenceFiles : scenario.files), status: recipe.edit === 'rejected-correct' ? 'rejected' : 'accepted', createdAt: at(-30_000), decidedAt: at(-10_000) });
   }
   session.frozenEvidence = freezeEvidence(session, now);
-  return { recipe, scenario, session, capturedExecution: Boolean(captured && !recipe.omitRun) };
+  return { recipe, scenario, session, capturedExecution: Boolean(captured), fixtureIdentity, executionContext };
 }
 
 export function conservativeReport(attempt: BenchmarkAttempt): CoachOutput {
@@ -77,7 +113,7 @@ export async function runDeterministicBenchmark(attempts: BenchmarkAttempt[]): P
     assert(new Set(manifest.items.map(item => item.id)).size === manifest.items.length, 'Evidence IDs collide.');
     validateReport(conservativeReport(attempt), attempt.scenario, manifest);
     if (attempt.recipe.answers.length === 0) assert(!manifest.items.some(item => item.kind === 'utterance'), 'An unrecorded explanation was fabricated.');
-    if (attempt.recipe.omitRun) assert(!manifest.items.some(item => item.kind === 'test'), 'An unexecuted test was fabricated.');
+    if (!attempt.capturedExecution) assert(!attempt.session.runs.length && !manifest.items.some(item => item.kind === 'test'), 'An unexecuted test was fabricated.');
   });
   const baseline = attempts.find(row => row.recipe.id === 'money-starter')!;
   await check('reject-unknown-evidence', () => {
@@ -134,7 +170,7 @@ export const candidateSetSchema = z.object({ benchmarkVersion: z.string(), prove
 export type CandidateSet = z.infer<typeof candidateSetSchema>;
 export type Candidate = CandidateSet['candidates'][number];
 export const candidateDigest = (candidate: Candidate) => digest(candidate);
-export const attemptContextDigest = (attempt: BenchmarkAttempt) => digest({ scenarioDigest: attempt.session.scenarioDigest, evidenceDigest: attempt.session.frozenEvidence!.digest });
+export const attemptContextDigest = (attempt: BenchmarkAttempt) => digest({ scenarioDigest: attempt.session.scenarioDigest, evidenceDigest: attempt.session.frozenEvidence!.digest, fixtureIdentity: attempt.fixtureIdentity, executionContext: attempt.executionContext });
 export function annotationTemplate(version: string, attempts: BenchmarkAttempt[], candidates: Candidate[] = []): HumanAnnotations {
   return { benchmarkVersion: version, provenance: 'human-review-required', cases: attempts.map(attempt => ({ caseId: attempt.recipe.id, candidateDigest: candidates.find(row => row.caseId === attempt.recipe.id) ? candidateDigest(candidates.find(row => row.caseId === attempt.recipe.id)!) : null, reviews: [], adjudication: null })) };
 }

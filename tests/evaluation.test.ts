@@ -62,7 +62,7 @@ describe('captured attempt regression benchmark', () => {
   });
   it('generates a blank annotation template with no invented labels', () => {
     const template = annotationTemplate(version, attempts);
-    expect(template.cases).toHaveLength(17);
+    expect(template.cases).toHaveLength(21);
     expect(template.cases.every(row => !row.reviews.length && row.adjudication === null && row.candidateDigest === null)).toBe(true);
     expect(annotationSchema.parse(template)).toEqual(template);
   });
@@ -73,7 +73,7 @@ describe('release gate mechanics using hypothetical unit data only', () => {
     const { candidates, annotations } = hypotheticalReviewSet(attempts);
     annotations.cases[0].reviews[1].reviewerId = annotations.cases[0].reviews[0].reviewerId;
     const release = calculateReleaseGate(version, attempts, regressions, candidates, annotations);
-    expect(release.metrics.reviewedAttempts).toBe(16);
+    expect(release.metrics.reviewedAttempts).toBe(attempts.length - 1);
     expect(release.status).toBe('pending');
   });
   it('rejects unaudited or non-independent annotations at the schema boundary', () => {
@@ -86,7 +86,7 @@ describe('release gate mechanics using hypothetical unit data only', () => {
     const { candidates, annotations } = hypotheticalReviewSet(attempts);
     candidates.candidates[0].report.overview += ' Changed after review.';
     const release = calculateReleaseGate(version, attempts, regressions, candidates, annotations);
-    expect(release.metrics.reviewedAttempts).toBe(16);
+    expect(release.metrics.reviewedAttempts).toBe(attempts.length - 1);
     expect(release.status).toBe('pending');
   });
   it('blocks candidate output bound to different frozen evidence', () => {
@@ -111,7 +111,7 @@ describe('release gate mechanics using hypothetical unit data only', () => {
     const release = calculateReleaseGate(version, attempts, regressions, candidates, annotations);
     expect(release.status).toBe('blocked');
     expect(release.metrics.substantiveClaimSupport).toBe(0);
-    expect(release.metrics.sampledClaims).toBe(17);
+    expect(release.metrics.sampledClaims).toBe(attempts.length);
     expect(release.metrics.rubricWithinOneBand).toBeLessThan(0.85);
   });
   it('allows the pass branch only with complete hypothetical data at the configured minimum', () => {
