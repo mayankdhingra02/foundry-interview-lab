@@ -1,4 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { canonical, digest, DomainError, requestKey } from '../interview-practice/domain';
 import type { EvidenceManifest, PracticeDatabase, Session } from '../interview-practice/types';
 import { emptyDatabase, type PracticeStore } from './store';
@@ -74,6 +75,7 @@ function specifications(database: PracticeDatabase): TableSpec[] {
 
 /** Trusted-server adapter. Every entity is a distinct SQL row; there is no serialized whole-database row. */
 export class PostgresPracticeStore implements PracticeStore {
+  private readonly transactionContext = new AsyncLocalStorage<PoolClient>();
   private readonly options: Required<PostgresStoreOptions>;
   readonly pool: Pool;
   private readonly ownsPool: boolean;
@@ -203,12 +205,14 @@ export class PostgresPracticeStore implements PracticeStore {
     try {
       client = await this.pool.connect(); await client.query('begin'); await this.setup(client);
       await client.query('select pg_advisory_xact_lock($1)', [this.options.advisoryLockKey]);
-      const before = await this.load(client), database = structuredClone(before), result = await operation(database);
+      const before = await this.load(client), database = structuredClone(before), result = await this.transactionContext.run(client, () => operation(database));
       await this.persist(client, before, database); await client.query('commit'); return structuredClone(result);
     } catch (error) {
       await client?.query('rollback').catch(() => undefined);
       if (error instanceof DomainError) throw error; throw unavailable();
     } finally { client?.release(); }
   }
+  /** Trusted extensions can join the current transaction; never retain this client beyond the callback. */
+  currentTransactionClient(): PoolClient | undefined { return this.transactionContext.getStore(); }
   async close() { if (this.ownsPool) await this.pool.end(); }
 }
