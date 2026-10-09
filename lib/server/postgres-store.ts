@@ -104,17 +104,30 @@ export class PostgresPracticeStore implements PracticeStore {
   }
   private async load(client: PoolClient): Promise<PracticeDatabase> {
     const db = emptyDatabase(), records = new Map<string, RawRow[]>();
-    let totalBytes = 0;
     // Additive rollout: baseline practice remains readable before the optional review migration.
     const reviewReady = Boolean((await client.query("select to_regclass('public.ai_practice_review_cases') as table_name")).rows[0].table_name);
-    for (const table of [...tables, ...(reviewReady ? reviewTables : [])]) {
-      const size = await client.query<{ bytes: string; count: string }>(`select coalesce(sum(octet_length(runtime_payload::text)),0)::text as bytes, count(*)::text as count from public.${table}`);
-      totalBytes += Number(size.rows[0].bytes);
-      if (totalBytes > this.options.maxStateBytes || Number(size.rows[0].count) > this.options.maxEntityRows) throw new DomainError('unavailable', 'The initial persistence adapter capacity was reached. Data was not truncated; qualify a scoped adapter before expanding capacity.');
-      const result = await client.query<RawRow>(`select * from public.${table}`);
-      for (const row of result.rows) if (!row.runtime_payload || typeof row.runtime_payload !== 'object' || Array.isArray(row.runtime_payload) || !Object.keys(row.runtime_payload).length) throw unavailable();
-      records.set(table, result.rows);
+    const present = [...tables, ...(reviewReady ? reviewTables : [])];
+    // Identifiers come only from the fixed table lists above. Preflight all tables
+    // in one request before transferring any private entity payloads.
+    const sizes = await client.query<{ table_name: string; bytes: string; count: string }>(present.map(table => `select '${table}'::text as table_name, coalesce(sum(octet_length(runtime_payload::text)),0)::text as bytes, count(*)::text as count from public.${table}`).join(' union all '));
+    const counts = new Map<string, number>(); let totalBytes = 0;
+    for (const row of sizes.rows) {
+      const bytes = Number(row.bytes), count = Number(row.count);
+      if (!present.includes(row.table_name as typeof present[number]) || counts.has(row.table_name) || !Number.isSafeInteger(bytes) || bytes < 0 || !Number.isSafeInteger(count) || count < 0) throw unavailable();
+      totalBytes += bytes; counts.set(row.table_name, count); records.set(row.table_name, []);
+      if (totalBytes > this.options.maxStateBytes || count > this.options.maxEntityRows) throw new DomainError('unavailable', 'The initial persistence adapter capacity was reached. Data was not truncated; qualify a scoped adapter before expanding capacity.');
     }
+    if (counts.size !== present.length) throw unavailable();
+    // A tagged row stream avoids one network roundtrip per table and avoids a
+    // single giant JSON aggregate. to_jsonb keeps nested JSON payloads typed.
+    const result = await client.query<{ table_name: string; entity: RawRow }>(present.map(table => `select '${table}'::text as table_name, to_jsonb(entity) as entity from public.${table} as entity`).join(' union all '));
+    for (const { table_name: table, entity: row } of result.rows) {
+      const target = records.get(table);
+      if (!target || !row || typeof row !== 'object' || Array.isArray(row) || !row.runtime_payload || typeof row.runtime_payload !== 'object' || Array.isArray(row.runtime_payload) || !Object.keys(row.runtime_payload).length) throw unavailable();
+      target.push(row);
+      if (target.length > counts.get(table)!) throw unavailable();
+    }
+    for (const table of present) if (records.get(table)!.length !== counts.get(table)) throw unavailable();
     for (const row of records.get('ai_practice_sessions')!) {
       const metadata = row.runtime_payload;
       if (metadata.id !== row.id || metadata.ownerId !== row.user_id || metadata.scenarioId !== row.scenario_id || metadata.scenarioVersion !== row.scenario_version || metadata.revision !== Number(row.revision) || metadata.lifecycle !== row.lifecycle) throw unavailable();

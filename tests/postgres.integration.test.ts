@@ -69,6 +69,20 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     const updates = await Promise.allSettled([service.saveWorkspace(ownerA, session.id, { ...mut(session.revision), files: { 'service.py': 'first' } }), service.saveWorkspace(ownerA, session.id, { ...mut(session.revision), files: { 'service.py': 'second' } })]);
     expect(updates.filter(r => r.status === 'fulfilled')).toHaveLength(1);
   });
+  it('fails closed on real per-table capacity overflow without truncating acknowledged evidence', async () => {
+    const session = await create();
+    await service.saveWorkspace(ownerA, session.id, { ...mut(session.revision), files: { 'service.py': 'acknowledged second snapshot' } });
+    const restricted = new PostgresPracticeStore(servicePool, { maxEntityRows: 1 });
+    await expect(restricted.read()).rejects.toMatchObject({ code: 'unavailable' });
+    expect((await service.getSession(ownerA, session.id)).files['service.py']).toBe('acknowledged second snapshot');
+    expect((await pool.query('select count(*)::int as count from ai_practice_snapshots')).rows[0].count).toBe(2);
+  });
+  it('enforces the real SQL payload byte preflight before accepting a bounded-corpus read', async () => {
+    const session = await create();
+    const restricted = new PostgresPracticeStore(servicePool, { maxStateBytes: 1 });
+    await expect(restricted.read()).rejects.toMatchObject({ code: 'unavailable' });
+    expect((await service.getSession(ownerA, session.id)).files).toEqual(session.files);
+  });
   it('enforces actual SQL RLS, anonymous denial and composite owner relationships', async () => {
     const a = await create(ownerA); await create(ownerB);
     const client = await pool.connect();
