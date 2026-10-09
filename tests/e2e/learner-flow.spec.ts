@@ -82,3 +82,47 @@ test("catalog, navigation and setup remain usable on a narrow screen", async ({ 
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath("catalog-mobile.png"), fullPage: true });
 });
+
+test("settings exports and deletes private practice content with the retention disclosure", async ({ page }, testInfo) => {
+  await page.goto("/interview-practice");
+  await page.getByRole("button", { name: "Set up practice", exact: true }).first().click();
+  await page.getByRole("button", { name: "Start session", exact: true }).click();
+  await page.waitForURL(/\/interview-practice\/[^/?]+$/);
+  const id = new URL(page.url()).pathname.split("/").at(-1)!;
+  const originalCookies = await page.context().cookies();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+  await expect(page.getByText(/Limited financial and abuse-prevention counters are retained under/)).toBeVisible();
+  const downloadPromise = page.waitForEvent("download");
+  const exportPromise = page.waitForResponse(response => new URL(response.url()).pathname === "/api/account/export");
+  await page.getByRole("button", { name: "Export my data", exact: true }).click();
+  expect((await downloadPromise).suggestedFilename()).toContain("foundry-account-export");
+  const exported = await exportPromise; expect(exported.ok()).toBeTruthy();
+  expect((await exported.json()).sessions.some((session: { id: string }) => session.id === id)).toBe(true);
+  await page.getByRole("button", { name: "Delete practice data", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete your Interview Lab data?" });
+  await expect(dialog).toContainText("Limited financial and abuse-prevention counters are retained.");
+  await dialog.getByLabel("Type DELETE to confirm", { exact: true }).fill("DELETE");
+  const deletionKeys: string[] = [];
+  await page.route("**/api/account", route => {
+    deletionKeys.push(route.request().postDataJSON().requestId);
+    return deletionKeys.length === 1 ? route.fulfill({ status: 503, json: { error: { message: "Temporary test transport interruption." } } }) : route.continue();
+  });
+  await dialog.getByRole("button", { name: "Delete Interview Lab data", exact: true }).click();
+  await expect(page.locator(".notice.error")).toContainText("Temporary test transport interruption.");
+  const deletionPromise = page.waitForResponse(response => new URL(response.url()).pathname === "/api/account" && response.request().method() === "DELETE");
+  await dialog.getByRole("button", { name: "Delete Interview Lab data", exact: true }).click();
+  const deletion = await deletionPromise; expect(deletion.status()).toBe(200);
+  const submitted = deletion.request().postDataJSON();
+  expect(submitted.requestId).toMatch(/^[a-zA-Z0-9_-]{8,128}$/);
+  expect(deletionKeys).toHaveLength(2); expect(deletionKeys[0]).toBe(deletionKeys[1]);
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("Your private Interview Lab content was deleted. Limited usage counters and your shared sign-in are preserved.", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("settings-data-deleted.png"), fullPage: true });
+  // Restore this test's own development cookie to verify its former private
+  // content is gone even though DELETE clears the browser's local identity.
+  await page.context().addCookies(originalCookies);
+  const remaining = await page.request.get("/api/interview-practice/sessions");
+  expect((await remaining.json()).sessions).toEqual([]);
+  expect((await page.request.get(`/api/interview-practice/sessions/${id}`)).status()).toBe(404);
+});
