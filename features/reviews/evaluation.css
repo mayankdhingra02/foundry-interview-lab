@@ -1,0 +1,21 @@
+.evaluation-library h2 { margin:0 0 12px; font-size:20px; }
+.evaluation-library details { margin:16px 0; }
+.evaluation-library summary { cursor:pointer; font-weight:500; }
+.evaluation-toolbar { display:flex; align-items:end; flex-wrap:wrap; gap:16px; margin:20px 0; }
+.evaluation-toolbar label { display:grid; gap:6px; }
+.evaluation-layout { display:grid; grid-template-columns:minmax(220px,300px) minmax(0,1fr); align-items:start; gap:28px; }
+.evaluation-list { border-top:1px solid var(--line); }
+.evaluation-list button { display:grid; gap:6px; width:100%; border:0; border-bottom:1px solid var(--line); background:transparent; text-align:left; padding:14px 10px; }
+.evaluation-list button[aria-current=true] { background:var(--accent-soft); }
+.evaluation-list span { font-size:12px; color:var(--muted); }
+.evaluation-detail { min-width:0; overflow-wrap:anywhere; }
+.evaluation-detail h3 { margin:0 0 12px; font-size:18px; }
+.evaluation-detail h4 { margin:24px 0 10px; font-size:15px; }
+.evaluation-detail blockquote { margin:12px 0; padding:8px 14px; border-left:2px solid var(--line); white-space:pre-wrap; }
+.evaluation-metadata { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; }
+.evaluation-metadata dt { color:var(--muted); font-size:12px; }
+.evaluation-metadata dd { margin:4px 0 0; }
+.evaluation-table-wrap { overflow:auto; }
+.evaluation-table-wrap table { width:100%; border-collapse:collapse; }
+.evaluation-table-wrap th,.evaluation-table-wrap td { text-align:left; vertical-align:top; padding:10px; border-bottom:1px solid var(--line); font-size:12px; }
+@media(max-width:900px) { .evaluation-layout { grid-template-columns:1fr; gap:24px; }.evaluation-list { max-height:300px; overflow:auto; }.evaluation-metadata { grid-template-columns:1fr; } }
