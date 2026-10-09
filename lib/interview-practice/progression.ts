@@ -1,4 +1,5 @@
 import type { CoachingFinding, PublicScenario, RubricLevel, SessionView } from './types';
+import { timingConditions } from './timing';
 
 type ObservedLevel = Exclude<RubricLevel, 'Not observed'>;
 export type ProgressionGoals = { selectedCompetencies?: string[] };
@@ -6,6 +7,8 @@ export type PracticeConditions = {
   exposure: 'fresh' | 'repeated'; mode: SessionView['mode']; aiHelpAllowed: boolean;
   assistantRequests: number; assistantResponses: number; acceptedEdits: number;
   hintsOpened: number; helpReceived: boolean; accommodationCount: number;
+  originalTargetMinutes: number; targetMinutes: number; extendedMinutes: number; timingExtensions: number;
+  setupExtraMinutes: number; participation: 'text-or-voice' | 'written-only';
 };
 export type SkillObservation = {
   sessionId: string; scenarioId: string; scenarioVersion: string; rubricVersion: string;
@@ -96,6 +99,7 @@ function attemptsOnce(sessions: SessionView[]) {
   return [...rows.values()].sort((a, b) => compareTime(a.createdAt, b.createdAt) || compare(a.id, b.id));
 }
 function conditions(session: SessionView, seen: Set<string>): PracticeConditions {
+  const { recordedConditionCount, ...timing } = timingConditions(session.configuration);
   const assistantRequests = session.assistantMessages.filter(message => message.role === 'learner').length;
   const assistantResponses = session.assistantMessages.filter(message => message.role === 'assistant').length;
   const acceptedEdits = session.editProposals.filter(proposal => proposal.status === 'accepted').length;
@@ -104,7 +108,8 @@ function conditions(session: SessionView, seen: Set<string>): PracticeConditions
     mode: session.mode, aiHelpAllowed: session.configuration.aiHelp,
     assistantRequests, assistantResponses, acceptedEdits, hintsOpened: session.hintsOpened,
     helpReceived: assistantResponses > 0 || acceptedEdits > 0 || session.hintsOpened > 0,
-    accommodationCount: session.configuration.accommodations.length,
+    accommodationCount: recordedConditionCount, ...timing,
+    timingExtensions: session.events.filter(event => event.type === 'session.timing-extended').length,
   };
 }
 function groupKey(observation: SkillObservation) {

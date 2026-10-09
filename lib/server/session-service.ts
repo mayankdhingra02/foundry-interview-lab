@@ -7,10 +7,11 @@ import type { InferenceRecord, JobClaim, JobKind, JobResult, JobView, Mutation, 
 import type { PracticeStore } from './store';
 import { configuredRuntimeBinding, parseRuntimeBinding, type RuntimeBinding } from '../runtime/binding';
 import { assertRequestNotErased, rememberErasedRequests } from './deleted-requests';
+import { MAX_ADVISORY_MINUTES, practiceConditionsSchema, setupExtraMinutes } from '../interview-practice/timing';
 
 export type SessionAdmissionContext = { ownerId: string; sessionId: string; scenarioId: string; scenarioVersion: string; requestId: string; now: string; database: PracticeDatabase };
 export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void>; admissionLimits?: Partial<AdmissionLimits>; runtimeBinding?: (scenario: Scenario) => RuntimeBinding | null };
-export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; voice?: boolean; accommodations?: string[] };
+export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; voice?: boolean; accommodations?: string[]; practiceConditions?: SessionConfiguration['practiceConditions'] };
 export type SessionMutationResult = { session: SessionView; job?: JobView; hint?: string };
 export type TrustedSupportGuard = (database: PracticeDatabase, now: string) => void;
 /** Trusted, synchronous decision captured before entering the store transaction. */
@@ -129,6 +130,16 @@ export class SessionService {
       if (input.mode !== undefined && !['practice', 'simulation'].includes(input.mode)) throw new DomainError('invalid', 'Select practice or simulation mode.');
       const config = input.configuration ?? {};
       const configuration: SessionConfiguration = { role: (config.role ?? input.role ?? 'Backend engineer').slice(0, 120), level: (config.level ?? input.level ?? scenario.level).slice(0, 100), skills: config.skills ?? input.skills ?? [...scenario.tags], targetMinutes: config.targetMinutes ?? input.targetMinutes ?? input.durationMinutes ?? scenario.durationMinutes, aiHelp: config.aiHelp ?? input.aiHelp ?? input.aiAssistance ?? true, accommodations: config.accommodations ?? input.accommodations ?? [], voice: config.voice ?? input.voice ?? false };
+      const selectedConditions = config.practiceConditions ?? input.practiceConditions;
+      if (selectedConditions !== undefined) {
+        const parsed = practiceConditionsSchema.safeParse(selectedConditions);
+        if (!parsed.success) throw new DomainError('invalid', 'Select the available timing and participation options.');
+        configuration.practiceConditions = parsed.data;
+        if (configuration.targetMinutes - setupExtraMinutes(parsed.data.timing) < 5) throw new DomainError('invalid', 'The advisory target must include at least five minutes before extra setup time.');
+        if (parsed.data.participation === 'written-only' && configuration.voice) throw new DomainError('invalid', 'Written-only participation cannot enable voice. Select text conversation.');
+      }
+      // Server-owned: supplied originalTargetMinutes is never trusted.
+      configuration.originalTargetMinutes = configuration.targetMinutes;
       if (!Number.isInteger(configuration.targetMinutes) || configuration.targetMinutes < 5 || configuration.targetMinutes > 180 || !Array.isArray(configuration.skills) || configuration.skills.length > 20 || configuration.skills.some(s => typeof s !== 'string' || s.length > 100) || !Array.isArray(configuration.accommodations) || configuration.accommodations.length > 10 || configuration.accommodations.some(s => typeof s !== 'string' || s.length > 200) || typeof configuration.aiHelp !== 'boolean' || typeof configuration.voice !== 'boolean') throw new DomainError('invalid', 'Invalid session configuration.');
       const session: Session = { id: randomUUID(), ownerId, scenarioId: scenario.id, scenarioVersion: scenario.version, scenarioDigest: digest(scenario), scenario: toPublicScenario(scenario), mode: input.mode ?? 'practice', configuration, lifecycle: 'active', stageId: scenario.stages[0].id, revision: 0, files: validateFiles(scenario.files, scenario), snapshots: [], codeFrozenSnapshotId: null, frozenEvidence: null, events: [], turns: [], runs: [], jobs: [], assistantMessages: [], editProposals: [], reports: [], usage: { reservedUsd: 0, spentUsd: 0, uncertainUsd: 0, runs: 0, aiCalls: 0 }, createdAt: now, updatedAt: now, hintsOpened: 0, completedDrillIds: [], promptExposure: all.some(s => s.scenarioId === scenario.id) ? 'repeated' : 'fresh' };
       await this.admissionPolicy?.({ ownerId, sessionId: session.id, scenarioId: scenario.id, scenarioVersion: scenario.version, requestId, now, database: db });
@@ -188,6 +199,21 @@ export class SessionService {
         const job = this.enqueue(db, session, 'coach', input.requestId, { evidenceDigest: session.frozenEvidence.digest, watermark: session.frozenEvidence.watermark, generationId: randomUUID() }, now);
         return { session: sessionView(session), job: publicJob(job) };
       } else throw new DomainError('invalid', 'Unknown session command.');
+      return { session: sessionView(session) };
+    });
+  }
+  async extendTiming(ownerId: string, id: string, input: Mutation & { additionalMinutes: 15 | 30 }): Promise<SessionMutationResult> {
+    return this.mutate(ownerId, input.requestId, 'timing', { additionalMinutes: input.additionalMinutes }, id, (db, now) => {
+      const session = ownedSession(db.sessions, ownerId, id); assertRevision(session, input.expectedRevision);
+      if (!['active', 'paused'].includes(session.lifecycle) || session.frozenEvidence) throw new DomainError('conflict', 'This attempt has been submitted. Its recorded practice conditions are frozen.');
+      if (input.additionalMinutes !== 15 && input.additionalMinutes !== 30) throw new DomainError('invalid', 'Choose a 15 or 30 minute advisory extension.');
+      const previousTargetMinutes = session.configuration.targetMinutes;
+      const targetMinutes = previousTargetMinutes + input.additionalMinutes;
+      if (targetMinutes > MAX_ADVISORY_MINUTES) throw new DomainError('conflict', 'The advisory target is already at its available limit. You can keep working and saving; the timer does not end your attempt.');
+      const originalTargetMinutes = session.configuration.originalTargetMinutes ?? previousTargetMinutes;
+      session.configuration.originalTargetMinutes = originalTargetMinutes;
+      session.configuration.targetMinutes = targetMinutes;
+      appendEvent(session, 'session.timing-extended', { additionalMinutes: input.additionalMinutes, previousTargetMinutes, targetMinutes, originalTargetMinutes }, input.requestId, now, 'learner');
       return { session: sessionView(session) };
     });
   }

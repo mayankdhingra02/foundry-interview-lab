@@ -2,11 +2,12 @@
 
 import { ApiError } from "./client";
 import type { SessionView } from "@/lib/interview-practice/types";
+import { practiceConditionsSchema } from "@/lib/interview-practice/timing";
 
 export const pendingStoragePrefix = "foundry-practice-pending:";
 export type PendingRequest = { payload: string; uncertain: boolean; createdAt: string; title?: string; scenarioVersion?: string; acknowledged?: boolean; draftSessionIds?: string[] };
 export type PendingIntent = { path: string; body: Record<string, unknown>; operationRequestId?: string };
-const paths = new Set(["commands", "hints", "runs", "assistant", "turns", "edit-decisions", "drills", "reports", "interaction", "cancel-job", "undo-edit"]);
+const paths = new Set(["commands", "hints", "runs", "assistant", "turns", "edit-decisions", "drills", "reports", "interaction", "cancel-job", "undo-edit", "timing"]);
 const maxEntries = 20;
 const maxStorageCharacters = 160_000;
 const replayWindowMs = 30 * 24 * 60 * 60 * 1000;
@@ -38,7 +39,8 @@ function validEntry(intent: string, value: unknown, scope: string): value is Pen
     const wire: unknown = JSON.parse(String(value.payload));
     if (!object(wire) || !text(wire.requestId, 128) || String(wire.requestId).length < 8) return false;
     if (scope === "creation") {
-      const allowed = new Set(["scenarioId", "mode", "role", "level", "skills", "targetMinutes", "aiHelp", "voice", "requestId"]);
+      const allowed = new Set(["scenarioId", "mode", "role", "level", "skills", "targetMinutes", "aiHelp", "voice", "practiceConditions", "requestId"]);
+      if (wire.practiceConditions !== undefined && !practiceConditionsSchema.safeParse(wire.practiceConditions).success) return false;
       return intent === "create" && Object.keys(wire).every(key => allowed.has(key)) && text(wire.scenarioId, 100) && ["practice", "simulation"].includes(String(wire.mode)) && text(wire.role, 120) && text(wire.level, 100) && Array.isArray(wire.skills) && wire.skills.length <= 20 && wire.skills.every(skill => text(skill, 100)) && Number.isInteger(wire.targetMinutes) && Number(wire.targetMinutes) >= 5 && Number(wire.targetMinutes) <= 180 && typeof wire.aiHelp === "boolean" && typeof wire.voice === "boolean";
     }
     if (scope === "delete-account" || /^delete-session:[a-zA-Z0-9_-]{1,128}$/.test(scope)) {

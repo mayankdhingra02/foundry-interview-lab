@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getScenario } from '../lib/content/scenarios';
-import { coach, interview, assist, observationOnlyReport, ProviderFailure } from '../lib/ai/provider';
+import { coach, interview, assist, observationOnlyReport, ProviderFailure, PROMPT_VERSION } from '../lib/ai/provider';
 import { inferenceReservations, modelPolicy } from '../lib/ai/policy';
 import { freezeEvidence } from '../lib/interview-practice/evidence';
 import { MemoryPracticeStore } from '../lib/server/store';
@@ -24,6 +24,20 @@ beforeEach(async () => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('provider role and evidence boundary', () => {
+  it('records the revised no-penalty and learner-check origin policy without claiming model quality', async () => {
+    session.configuration.practiceConditions = { timing: 'extra-15', participation: 'written-only' };
+    session.configuration.originalTargetMinutes = 60; session.configuration.targetMinutes = 75;
+    session.frozenEvidence = freezeEvidence(session, new Date().toISOString()); respond(observationOnlyReport(scenario));
+    const result = await coach(scenario, session);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.instructions).toContain('time extensions, written participation');
+    expect(body.instructions).toContain('never justify lower rubric ratings');
+    expect(body.instructions).toContain('learner-authored-check');
+    expect(body.instructions).toContain('missing or zero-discovered checks remain unverified');
+    expect(JSON.parse(body.input[0].content).configuration).toMatchObject({ originalTargetMinutes: 60, targetMinutes: 75, practiceConditions: { participation: 'written-only' } });
+    expect(PROMPT_VERSION).toBe('foundry-2026-10-09-v2');
+    expect(result.inference?.promptVersion).toBe(PROMPT_VERSION);
+  });
   it('sends strict structured responses with no tools or reference/protected material to the assistant', async () => {
     respond({ message: 'Inspect how invalid input reaches the calculation.', files: [] });
     const result = await assist(scenario, session, { mode: 'ask', prompt: 'Help me trace this.' });

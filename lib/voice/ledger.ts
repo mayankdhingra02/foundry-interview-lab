@@ -120,7 +120,7 @@ export async function reconcileVoiceReservations(store: PracticeStore, options: 
 /** Setup preference never replaces explicit per-operation processing consent. */
 export function assertVoiceSession(session: Session) {
   assertActive(session);
-  if (session.configuration.voice !== true) throw new HttpError(403, 'voice_not_selected', 'This attempt uses text. Select optional voice when starting a new attempt.');
+  if (session.configuration.voice !== true || session.configuration.practiceConditions?.participation === 'written-only') throw new HttpError(403, 'voice_not_selected', 'This attempt uses text. Select optional voice when starting a new attempt.');
   if (session.stageId !== 'debrief' || !session.codeFrozenSnapshotId || session.frozenEvidence) throw new HttpError(409, 'voice_debrief_required', 'Voice answers are available during the debrief after Finish coding. Continue in text while working.');
 }
 
@@ -166,6 +166,6 @@ export async function settleVoice(store: PracticeStore, reservation: VoiceReserv
     // Deletion may race with the provider. Keep only the content-free posting;
     // never recreate a deleted session or return audio/transcript after deletion.
     closeReservation(database, admitted, uncertain || expired, now.toISOString());
-    return Boolean(!expired && session?.ownerId === reservation.ownerId && session.lifecycle === 'active' && session.configuration.voice === true && session.stageId === 'debrief' && session.codeFrozenSnapshotId && !session.frozenEvidence);
+    return Boolean(!expired && session?.ownerId === reservation.ownerId && session.lifecycle === 'active' && session.configuration.voice === true && session.configuration.practiceConditions?.participation !== 'written-only' && session.stageId === 'debrief' && session.codeFrozenSnapshotId && !session.frozenEvidence);
   });
 }

@@ -12,6 +12,7 @@ const payloads = {
   'coding.finished': { snapshotId: 'snapshot-1' },
   'session.paused': {},
   'session.resumed': {},
+  'session.timing-extended': { additionalMinutes: 15, previousTargetMinutes: 45, targetMinutes: 60, originalTargetMinutes: 45 },
   'session.submitted': { snapshotId: 'snapshot-1' },
   'test.requested': { jobId: 'job-1', snapshotId: 'snapshot-1' },
   'test.completed': { runId: 'run-1', jobId: 'job-1', snapshotId: 'snapshot-1', status: 'timeout' },
@@ -31,7 +32,7 @@ const payloads = {
 } satisfies { [T in EventType]: EventPayload<T> };
 
 function fixture(type: EventType = 'workspace.saved', payload: unknown = payloads[type]) {
-  return { id: 'event-1', sessionId: 'session-1', sequence: 1, schemaVersion: 1, type, occurredAt: now, recordedAt: now, source: type === 'interview.interaction' ? 'learner' : 'server', requestId: 'request-1', payload };
+  return { id: 'event-1', sessionId: 'session-1', sequence: 1, schemaVersion: 1, type, occurredAt: now, recordedAt: now, source: ['interview.interaction', 'session.timing-extended'].includes(type) ? 'learner' : 'server', requestId: 'request-1', payload };
 }
 function session() {
   // appendEvent only touches these fields; no learner workspace or provider is needed.

@@ -5,7 +5,7 @@ import { MemoryPracticeStore } from '../lib/server/store';
 import { SessionService } from '../lib/server/session-service';
 import { voiceConfig, type VoiceConfig } from '../lib/voice/config';
 import { mp3Duration, wavDuration } from '../lib/voice/audio';
-import { reserveVoice, settleVoice } from '../lib/voice/ledger';
+import { assertVoiceSession, reserveVoice, settleVoice } from '../lib/voice/ledger';
 import { voiceDebriefFixture } from './voice-fixtures';
 import { boundedBytes, VoiceService } from '../lib/voice/provider';
 
@@ -32,6 +32,14 @@ const voice = () => new VoiceService(store, config, fetcher, () => at);
 const admission = (overrides = {}) => ({ ownerId: 'owner-a', sessionId, requestId: randomUUID(), operation: 'transcribe' as const, fingerprint: 'a'.repeat(64), seconds: 60, characters: 0, usd: 0.3, ...overrides });
 
 describe('voice availability and bounded formats', () => {
+  it('enforces written-only participation even when a saved voice flag is inconsistent', async () => {
+    const session = await sessions.exportSession('owner-a', sessionId);
+    session.configuration.practiceConditions = { timing: 'standard', participation: 'written-only' };
+    expect(() => assertVoiceSession(session)).toThrow('This attempt uses text');
+    const reservation = await reserveVoice(store, config, admission(), at);
+    await store.transaction(db => { db.sessions[sessionId].configuration.practiceConditions = session.configuration.practiceConditions; });
+    expect(await settleVoice(store, reservation, false, at)).toBe(false);
+  });
   it('fails closed without qualification, explicit rates, limits, or production database', () => {
     const env = { FEATURE_VOICE: 'true', VOICE_QUALIFIED: 'true', DEEPGRAM_API_KEY: 'test-only', VOICE_STT_USD_PER_MINUTE: '.0043', VOICE_TTS_USD_PER_1K_CHARS: '.03', VOICE_MAX_SESSION_MINUTES: '20', VOICE_MAX_USER_DAILY_MINUTES: '60', VOICE_MAX_GLOBAL_DAILY_MINUTES: '600', MAX_SESSION_USD: '1', MAX_DAILY_USER_USD: '5', MAX_MONTHLY_USER_USD: '50', VOICE_MAX_GLOBAL_DAILY_USD: '50' };
     expect(voiceConfig(env)).toMatchObject({ sttUsdPerMinute: .0043 });
