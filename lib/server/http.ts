@@ -1,4 +1,5 @@
 import { applicationOrigin } from './config';
+import { recordOperationalFailure } from './diagnostics';
 
 export class HttpError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
@@ -36,15 +37,17 @@ export async function readJson(request: Request, limit = 240_000): Promise<Recor
 }
 
 export function errorResponse(error: unknown) {
-  if (error instanceof HttpError) return privateJson({ error: { code: error.code, message: error.message } }, error.status);
+  if (error instanceof HttpError) {
+    const reference = recordOperationalFailure(error.status, error.code);
+    return privateJson({ error: { code: error.code, message: error.message, ...(reference ? { reference } : {}) } }, error.status, reference ? { 'X-Practice-Reference': reference } : undefined);
+  }
   if (error && typeof error === 'object' && 'status' in error && 'code' in error && 'message' in error) {
     const e = error as { status: number; code: string; message: string; revision?: number };
     if (Number.isInteger(e.status) && e.status >= 400 && e.status < 500)
       return privateJson({ error: { code: e.code, message: e.message, revision: e.revision } }, e.status);
   }
-  // Never include learner content, provider responses or credentials in diagnostics.
-  console.error(JSON.stringify({ event: 'request.failed', name: error instanceof Error ? error.name : 'UnknownError' }));
-  return privateJson({ error: { code: 'service_unavailable', message: 'This operation could not finish. Your acknowledged work is preserved. Try again.' } }, 503);
+  const reference = recordOperationalFailure(503)!;
+  return privateJson({ error: { code: 'service_unavailable', message: 'This operation could not finish. Your acknowledged work is preserved. Try again.', reference } }, 503, { 'X-Practice-Reference': reference });
 }
 
 export async function handle(request: Request, operation: () => Promise<Response>) {
