@@ -10,6 +10,8 @@ During the active debrief, the learner separately allows sending recordings and 
 
 Transcription appears in an editable review field. **Use transcript** copies it to the existing message composer. Only the ordinary authenticated turns endpoint commits the learner's reviewed text to evidence. Discarding a transcript creates no learner turn. Choosing another role tab, leaving the workspace, or changing session lifecycle releases the microphone and interrupts pending speech/playback. Cancel and Stop controls remain available during processing and playback.
 
+While browser permission is pending, **Cancel microphone request** immediately restores text and recording controls. Browser permission prompts cannot be dismissed programmatically: a later granted stream is stopped immediately without creating a recorder or upload. Cancellation invalidates that capture's continuation, so an old permission result cannot replace or stop a newer explicitly requested recording. **Cancel transcription** likewise invalidates pending audio conversion and aborts any browser request. Already-started provider work can still consume its reserved budget.
+
 Question playback sends a stable interviewer turn ID. The server reads the corresponding recorded text; client-supplied text cannot replace it. A Stop action aborts the browser request or stops the audio element and releases its object URL. If a provider request has already started, cancellation can still consume its reserved budget.
 
 ## Server integration
@@ -92,6 +94,8 @@ Deepgram's March 5, 2026 changelog says PAYG/Growth customers can opt in or out 
 ## Tests and deferred work
 
 `tests/voice.test.ts` uses mocked HTTP responses to test saved opt-in, historical defaults, active debrief gating, consent, ownership, waveform validation, streamed size limits, saved-question playback, transcript non-persistence, uncertainty, duplicate admission, selection/deletion races and simultaneous limits across all scopes. `tests/practice-api.test.ts` covers creation/export persistence, schema validation and pre-upgrade text replay compatibility. Fixtures test deterministic contracts; they do not establish provider quality. Browser equipment tests use fake local media APIs and do not qualify real microphones, supported browsers or speech providers.
+
+`tests/e2e/voice-cancellation.spec.ts` controls delayed browser permission and audio conversion to check cancellation before capture, an old permission result arriving after a newer recording starts, and cancellation before upload. These synthetic browser races make no speech-provider or hardware qualification claim.
 
 `RUN_POSTGRES_INTEGRATION=1 npx vitest run tests/voice-postgres.integration.test.ts` creates a fresh local disposable Docker database, applies migrations 0001/0002/0004/0007/0008 and uses the actual service-role grants. It tests persisted voice choices, pre-debrief/text/legacy denial, cross-adapter atomic admission, ledger roundtrip, deletion-resistant counters and database metadata constraints. It never reads a hosted DATABASE_URL or calls Deepgram. The new selection/gating regression requires fresh CI qualification; no local Docker or live speech call was made for this change.
 
