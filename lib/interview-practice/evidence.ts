@@ -58,10 +58,17 @@ export function validateInterviewProposal(value: unknown, scenario: Scenario, se
   if (!parsed.success) throw new DomainError('invalid', 'Interviewer response did not match the question contract.');
   const proposal = parsed.data, ids = new Set(buildEvidence(session).map(e => e.id));
   if (proposal.evidenceIds.some(id => !ids.has(id))) throw new DomainError('invalid', 'Interviewer cited unknown evidence.');
-  if (proposal.action === 'end_debrief') return proposal;
+  const asked = session.turns.filter(t => t.role === 'interviewer');
+  const required = new Set(scenario.probes.filter(p => p.stageId === session.stageId).map(p => p.competencyId));
+  const uncovered = [...required].filter(id => !asked.some(t => t.competencyId === id));
+  if (proposal.action === 'end_debrief') {
+    if (asked.length < 6 && uncovered.length) throw new DomainError('conflict', 'Required debrief coverage remains.');
+    return proposal;
+  }
   if (!proposal.question || !scenario.rubric.some(r => r.id === proposal.competencyId)) throw new DomainError('invalid', 'Question must target an allowed competency.');
   if (proposal.probeId && !scenario.probes.some(p => p.id === proposal.probeId && p.competencyId === proposal.competencyId && p.stageId === session.stageId)) throw new DomainError('invalid', 'Question uses a probe outside the current stage.');
   if (session.turns.filter(t => t.role === 'interviewer' && t.competencyId === proposal.competencyId).length >= 3) throw new DomainError('conflict', 'This competency has reached its question limit.');
-  if (session.turns.filter(t => t.role === 'interviewer').length >= 9) throw new DomainError('conflict', 'This debrief has reached its question limit.');
+  if (asked.length >= 6) throw new DomainError('conflict', 'This debrief has reached its question limit.');
+  if (6 - asked.length <= uncovered.length && !uncovered.includes(proposal.competencyId!)) throw new DomainError('conflict', 'This question must cover an unobserved required competency.');
   return proposal;
 }

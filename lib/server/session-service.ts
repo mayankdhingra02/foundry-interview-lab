@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { appendEvent, assertActive, assertCoding, assertRequestId, assertRevision, boundedText, createSnapshot, digest, DomainError, ownedSession, requestKey, selectedSnapshot, toPublicScenario, validateFiles } from '../interview-practice/domain';
 import { buildEvidence, freezeEvidence, validateInterviewProposal, validateReport } from '../interview-practice/evidence';
-import type { JobClaim, JobKind, JobResult, JobView, Mutation, PracticeDatabase, PracticeJob, Scenario, Session, SessionConfiguration, SessionView } from '../interview-practice/types';
+import type { InferenceRecord, JobClaim, JobKind, JobResult, JobView, Mutation, PracticeDatabase, PracticeJob, Scenario, Session, SessionConfiguration, SessionView } from '../interview-practice/types';
 import type { PracticeStore } from './store';
 
 export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>> };
 export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; accommodations?: string[] };
 export type SessionMutationResult = { session: SessionView; job?: JobView; hint?: string };
 export function publicJob(job: PracticeJob): JobView {
-  const { ownerId: _owner, claimToken: _claim, workerId: _worker, input: _input, fingerprint: _fingerprint, ...view } = structuredClone(job);
-  void _owner; void _claim; void _worker; void _input; void _fingerprint;
+  const { ownerId: _owner, claimToken: _claim, workerId: _worker, input: _input, fingerprint: _fingerprint, inference: _inference, ...view } = structuredClone(job);
+  void _owner; void _claim; void _worker; void _input; void _fingerprint; void _inference;
   return view;
 }
 export function sessionView(session: Session): SessionView {
@@ -297,16 +297,18 @@ export class SessionService {
         session.reports.push({ ...output, id: randomUUID(), generationId: String(job.input.generationId), createdAt: now, model: result.model, promptVersion: result.promptVersion, rubricVersion: scenario.version, evidenceDigest: session.frozenEvidence.digest, evidence: structuredClone(session.frozenEvidence.items) });
         session.lifecycle = 'completed'; appendEvent(session, 'coaching.ready', { reportId: session.reports.at(-1)!.id, jobId: job.id }, job.requestId, now, 'model');
       }
+      if (result.inference) job.inference = structuredClone(result.inference);
       this.settle(db, session, job, now, result.actualUsd ?? (result.kind === 'run' ? 0 : undefined));
       job.state = 'completed'; job.updatedAt = now; job.leaseExpiresAt = null; return true;
     });
   }
-  async failJob(claim: JobClaim, error: string, actualUsd?: number) {
+  async failJob(claim: JobClaim, error: string, actualUsd?: number, inference?: InferenceRecord) {
     return this.store.transaction(db => {
       const now = this.at(), found = this.locateClaim(db, claim, now); if (!found) return false;
       const { session, job } = found;
       // Caller supplies a safe category/message, never a provider body or secret.
       job.safeError = boundedText(error, 'Safe failure description', 500); job.state = 'failed'; job.updatedAt = now; job.leaseExpiresAt = null;
+      if (inference) job.inference = structuredClone(inference);
       this.settle(db, session, job, now, actualUsd);
       appendEvent(session, 'operation.failed', { jobId: job.id, kind: job.kind, error: job.safeError }, job.requestId, now);
       return true;

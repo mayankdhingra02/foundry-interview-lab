@@ -1,3 +1,6 @@
+import { runnerHealth } from '../runtime/runner';
+import { modelPolicy } from '../ai/policy';
+
 export function enabled(name: string, fallback = false): boolean {
   const value = process.env[name];
   return value === undefined ? fallback : value === 'true';
@@ -10,7 +13,9 @@ export function authMode(): 'local' | 'supabase' | 'unconfigured' {
 }
 
 export function capabilities() {
-  const ai = enabled('FEATURE_AI_INTERVIEW', true) && Boolean(process.env.OPENAI_API_KEY);
+  let modelConfigured = true;
+  try { modelPolicy(); } catch { modelConfigured = false; }
+  const ai = enabled('FEATURE_AI_INTERVIEW', true) && Boolean(process.env.OPENAI_API_KEY) && modelConfigured;
   const runnerMode = process.env.RUNNER_MODE || 'docker';
   const health = runnerHealth();
   const runner = enabled('FEATURE_EXECUTION', true) && health.configured && health.admitting;
@@ -32,5 +37,4 @@ export function applicationOrigin(): string {
   if (!url) throw new Error('APP_URL must be configured.');
   return new URL(url).origin;
 }
-import { runnerHealth } from '../runtime/runner';
 

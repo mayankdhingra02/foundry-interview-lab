@@ -159,7 +159,7 @@ describe('leases, cost admission, reports and deletion', () => {
   it('keeps the same frozen generation on report retry and survives tab closure', async () => {
     const store = new MemoryPracticeStore(), service = new SessionService(store, () => scenario); let session = await create(service);
     session = (await service.command('owner-a', session.id, { ...mutation(session.revision), action: 'finish' })).session;
-    const initial = await service.claimJob('worker'); await service.completeJob(initial!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'end_debrief', evidenceIds: [] } });
+    const initial = await service.claimJob('worker'); await service.completeJob(initial!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'ask_probe', question: 'What did you verify?', competencyId: 'correctness', probeId: 'p1', evidenceIds: [] } });
     session = await service.getSession('owner-a', session.id);
     await service.command('owner-a', session.id, { ...mutation(session.revision), action: 'submit' });
     const coach = await service.claimJob('worker'); await service.failJob(coach!, 'Provider unavailable', 0);
