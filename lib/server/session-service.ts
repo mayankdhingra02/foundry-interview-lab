@@ -13,6 +13,8 @@ export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxA
 export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; voice?: boolean; accommodations?: string[] };
 export type SessionMutationResult = { session: SessionView; job?: JobView; hint?: string };
 export type TrustedSupportGuard = (database: PracticeDatabase, now: string) => void;
+/** Trusted, synchronous decision captured before entering the store transaction. */
+export type FreshWorkGuard = () => void;
 export function publicJob(job: PracticeJob): JobView {
   const { ownerId: _owner, claimToken: _claim, workerId: _worker, input: _input, fingerprint: _fingerprint, inference: _inference, ...view } = structuredClone(job);
   void _owner; void _claim; void _worker; void _input; void _fingerprint; void _inference;
@@ -203,8 +205,9 @@ export class SessionService {
       return { session: sessionView(session), job: publicJob(job) };
     });
   }
-  async requestRun(ownerId: string, id: string, input: Mutation): Promise<SessionMutationResult> {
+  async requestRun(ownerId: string, id: string, input: Mutation, freshWorkGuard?: FreshWorkGuard): Promise<SessionMutationResult> {
     return this.mutate(ownerId, input.requestId, 'run', {}, id, (db, now) => {
+      freshWorkGuard?.();
       const session = ownedSession(db.sessions, ownerId, id); assertRevision(session, input.expectedRevision); assertActive(session);
       if (session.frozenEvidence) throw new DomainError('conflict', 'Final evidence is frozen.');
       const scenario = this.scenario(session), runtimeBinding = parseRuntimeBinding(this.resolveRuntimeBinding(scenario), scenario.runtime.image);
@@ -214,9 +217,10 @@ export class SessionService {
       return { session: sessionView(session), job: publicJob(job) };
     });
   }
-  async requestAssistant(ownerId: string, id: string, input: Mutation & { mode: 'ask' | 'plan' | 'edit'; message?: string; prompt?: string }): Promise<SessionMutationResult> {
+  async requestAssistant(ownerId: string, id: string, input: Mutation & { mode: 'ask' | 'plan' | 'edit'; message?: string; prompt?: string }, freshWorkGuard?: FreshWorkGuard): Promise<SessionMutationResult> {
     const prompt = boundedText(input.message ?? input.prompt, 'Assistant message', 3000);
     return this.mutate(ownerId, input.requestId, 'assistant', { mode: input.mode, prompt }, id, (db, now) => {
+      freshWorkGuard?.();
       const session = ownedSession(db.sessions, ownerId, id); assertRevision(session, input.expectedRevision); assertCoding(session);
       if (!session.configuration.aiHelp) throw new DomainError('conflict', 'Coding assistance is disabled for this attempt.');
       if (!['ask', 'plan', 'edit'].includes(input.mode)) throw new DomainError('invalid', 'Choose ask, plan or edit.');

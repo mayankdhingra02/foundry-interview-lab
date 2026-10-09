@@ -81,11 +81,21 @@ export async function practiceApi(request: Request, path: string[]) {
     else if (method === 'POST' && operation === 'turns') result = await service.commitTurn(actor.id, id, parsed(mutation.extend({ text: z.string().min(1).max(6000), source: z.enum(['typed', 'transcribed', 'corrected']).optional(), replyTo: z.string().optional() }), body));
     else if (method === 'POST' && operation === 'interaction') result = await new InteractionService(service.store).interact(actor.id, id, parsed(mutation.extend({ action: z.enum(['working', 'repeat', 'clarify']), topic: z.enum(['requirements', 'assistance', 'timing']).optional() }).strict(), body));
     else if (method === 'POST' && operation === 'runs') {
-      if (!capabilities().runner || !await executionAdmissionOpen()) throw new HttpError(503, 'runner_unavailable', 'Execution is unavailable or on an operational hold. Your work is saved.');
-      result = await service.requestRun(actor.id, id, parsed(mutation, body));
+      const input = parsed(mutation, body);
+      // Operational reads stay outside the transaction. Only fresh work invokes
+      // this captured decision; acknowledged retries retain their original result.
+      let available = false;
+      try { available = capabilities().runner && await executionAdmissionOpen(); } catch { /* Fail closed for new work. */ }
+      result = await service.requestRun(actor.id, id, input, () => {
+        if (!available) throw new HttpError(503, 'runner_unavailable', 'Execution is unavailable or on an operational hold. Your work is saved.');
+      });
     } else if (method === 'POST' && operation === 'assistant') {
-      if (!capabilities().assistant) throw new HttpError(503, 'assistant_unavailable', 'AI assistance is not configured.');
-      result = await service.requestAssistant(actor.id, id, parsed(mutation.extend({ mode: z.enum(['ask', 'plan', 'edit']), message: z.string().max(3000).optional(), prompt: z.string().max(3000).optional() }), body));
+      const input = parsed(mutation.extend({ mode: z.enum(['ask', 'plan', 'edit']), message: z.string().max(3000).optional(), prompt: z.string().max(3000).optional() }), body);
+      let available = false;
+      try { available = capabilities().assistant; } catch { /* Fail closed for new work. */ }
+      result = await service.requestAssistant(actor.id, id, input, () => {
+        if (!available) throw new HttpError(503, 'assistant_unavailable', 'AI assistance is not configured.');
+      });
     } else if (method === 'POST' && operation === 'edit-decisions') result = await service.decideEdit(actor.id, id, parsed(mutation.extend({ proposalId: z.string(), decision: z.enum(['accept', 'reject']) }), body));
     else if (method === 'POST' && operation === 'undo-edit') result = await service.undoEdit(actor.id, id, parsed(mutation.extend({ proposalId: z.string().uuid() }).strict(), body));
     else if (method === 'POST' && operation === 'hints') result = await service.revealHint(actor.id, id, parsed(mutation, body));
