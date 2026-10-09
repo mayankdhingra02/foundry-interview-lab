@@ -18,6 +18,8 @@ import { buildProgression } from '../interview-practice/progression';
 import { admittedScenarios } from './rollout';
 import { withFoundryNavigation } from './foundry-navigation';
 import { practiceConditionsSchema } from '../interview-practice/timing';
+import { emitMutationTelemetry, emitTelemetry } from './telemetry';
+import { randomUUID } from 'node:crypto';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
@@ -51,7 +53,9 @@ export async function practiceApi(request: Request, path: string[]) {
         return privateJson({ sessions: await service.listSessions(actor.id) });
       }
       if (method === 'POST') {
-        const result = await service.createSession(actor.id, parsed(creation, await readJson(request, 5000)));
+        const input = parsed(creation, await readJson(request, 5000));
+        const result = await service.createSession(actor.id, input);
+        emitMutationTelemetry(actor.id, result.session, input.requestId);
         return privateJson({ ...result, capabilities: capabilities() }, 201);
       }
     }
@@ -84,6 +88,7 @@ export async function practiceApi(request: Request, path: string[]) {
       return privateJson({ session, reviews }, 200, { 'Content-Disposition': `attachment; filename="practice-${id}.json"` });
     }
     if (!['POST', 'PUT'].includes(method)) throw new HttpError(404, 'not_found', 'Endpoint not found.');
+    const operationStarted = performance.now();
     const body = await readJson(request, operation === 'workspace' ? 300_000 : ['interaction', 'timing'].includes(operation) ? 2000 : 20_000);
     let result: SessionMutationResult;
     if (method === 'PUT' && operation === 'workspace') result = await service.saveWorkspace(actor.id, id, parsed(mutation.extend({ files: z.record(z.string().max(64_000)) }), body));
@@ -113,6 +118,8 @@ export async function practiceApi(request: Request, path: string[]) {
     else if (method === 'POST' && operation === 'drills') result = await service.completeDrill(actor.id, id, parsed(mutation.extend({ drillId: z.string() }), body));
     else if (method === 'POST' && operation === 'reports') result = await service.retryReport(actor.id, id, parsed(key, body));
     else throw new HttpError(404, 'not_found', 'Endpoint not found.');
+    if (typeof body.requestId === 'string') emitMutationTelemetry(actor.id, result.session, body.requestId);
+    if (operation === 'workspace') emitTelemetry(actor.id, result.session.id, randomUUID(), { event: 'latency.measured', metric: 'workspace.save', durationMs: performance.now() - operationStarted, outcome: 'acknowledged' });
     kickLocalWorker();
     return privateJson({ ...result, capabilities: capabilities() }, result.job && ['queued', 'running'].includes(result.job.state) ? 202 : 200);
   });
