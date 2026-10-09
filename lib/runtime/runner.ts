@@ -4,8 +4,9 @@ import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { validateFiles } from '../interview-practice/domain';
 import type { RunExecution, Scenario, ScenarioTest, TestObservation } from '../interview-practice/types';
+import { configuredRuntimeBinding, parseRuntimeBinding, runtimeBindingConfigured, type RuntimeBinding } from './binding';
 
-export type ExecuteOptions = { signal?: AbortSignal; includeProtected?: boolean };
+export type ExecuteOptions = { signal?: AbortSignal; includeProtected?: boolean; runtimeBinding?: RuntimeBinding };
 type CommandResult = { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean; aborted: boolean; outputLimited: boolean; error?: string };
 type CommandOptions = { signal?: AbortSignal; timeoutMs: number; maxOutputBytes?: number; input?: string };
 type CheckResult = { id: string; status: TestObservation['status']; testsRun: number; detail: string };
@@ -14,7 +15,6 @@ const OUTPUT_LIMIT = 64_000;
 const DETAIL_LIMIT = 4_000;
 const MANAGEMENT_TIMEOUT = 5_000;
 const MAX_SUITES = 8;
-const DEFAULT_IMAGE = 'python:3.11-slim';
 let admissionBlock: string | null = null;
 
 function bounded(value: string, bytes = OUTPUT_LIMIT) { return Buffer.from(value).subarray(0, bytes).toString('utf8'); }
@@ -22,7 +22,7 @@ function cancelled(signal?: AbortSignal) { return signal?.aborted === true; }
 
 /** Configuration is not a Docker health check. The daemon/image is qualified on each run. */
 export function configuredRunner(): boolean {
-  return (process.env.RUNNER_MODE || 'docker') === 'docker';
+  return (process.env.RUNNER_MODE || 'docker') === 'docker' && runtimeBindingConfigured();
 }
 
 /** This worker's admission latch is not a shared multi-worker circuit breaker. */
@@ -33,15 +33,6 @@ export function runnerHealth(): { configured: boolean; admitting: boolean; block
 
 /** Operator-only: call after reconciling abandoned execution containers. */
 export function resetRunnerAdmission(): void { admissionBlock = null; }
-
-function selectedImage(scenario: Scenario): string {
-  const image = process.env.PYTHON_IMAGE || scenario.runtime.image || DEFAULT_IMAGE;
-  const allowed = (process.env.RUNNER_ALLOWED_IMAGES || DEFAULT_IMAGE).split(',').map(value => value.trim()).filter(Boolean);
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,200}$/.test(image) || !allowed.includes(image)) {
-    throw new Error('The Python image is not in the server runtime allowlist.');
-  }
-  return image;
-}
 
 /** No bind mount, published port, host network, host PID namespace, or product secret. */
 export function buildDockerArguments(name: string, image: string, memoryMb: number): string[] {
@@ -192,23 +183,24 @@ export async function executeScenario(scenario: Scenario, files: Record<string, 
   const base = (status: RunExecution['status'], detail: string, tests: TestObservation[] = [], runtimeDigest?: string): RunExecution => ({
     status, command: safeCommand, stdout: '', stderr: bounded(detail), exitCode: null, tests, durationMs: Date.now() - started, ...(runtimeDigest ? { runtimeDigest } : {}),
   });
-  if (!configuredRunner()) return base('infrastructure_error', 'A qualified remote execution and cancellation contract is not configured. Select the Docker runner; learner code was not executed.');
+  if ((process.env.RUNNER_MODE || 'docker') !== 'docker') return base('infrastructure_error', 'A qualified remote execution and cancellation contract is not configured. Select the Docker runner; learner code was not executed.');
   if (admissionBlock) return base('infrastructure_error', admissionBlock);
   if (cancelled(options.signal)) return base('infrastructure_error', 'Execution was cancelled before admission; learner code was not executed.');
-  let snapshot: Record<string, string>, packageCopy: Scenario, image: string;
+  let snapshot: Record<string, string>, packageCopy: Scenario, binding: RuntimeBinding | null;
   try {
     packageCopy = structuredClone(scenario);
     snapshot = validateFiles(files, packageCopy);
-    image = selectedImage(packageCopy);
+    binding = options.runtimeBinding === undefined ? configuredRuntimeBinding(packageCopy) : parseRuntimeBinding(options.runtimeBinding, packageCopy.runtime.image);
+    if (!binding) return base('infrastructure_error', 'A reviewed immutable Python runtime binding is required. Learner code was not executed.');
   } catch (error) { return base('infrastructure_error', error instanceof Error ? error.message : 'Execution input was rejected.'); }
   const tests = packageCopy.tests.filter(test => options.includeProtected === true || test.visible);
   if (!tests.length || tests.length > MAX_SUITES) return base('infrastructure_error', 'The admitted scenario must have between one and eight selected check files.');
   const deadline = started + Math.max(1, Math.min(60, packageCopy.runtime.timeoutSeconds)) * 1_000;
-  const inspection = await command(['image', 'inspect', image, '--format', '{{.Id}}'], { signal: options.signal, timeoutMs: Math.min(MANAGEMENT_TIMEOUT, Math.max(1, deadline - Date.now())), maxOutputBytes: 4_000 });
-  const imageId = inspection.stdout.trim();
+  const imageId = binding.imageId;
+  const inspection = await command(['image', 'inspect', imageId, '--format', '{{.Id}}'], { signal: options.signal, timeoutMs: Math.min(MANAGEMENT_TIMEOUT, Math.max(1, deadline - Date.now())), maxOutputBytes: 4_000 });
   if (inspection.aborted) return base('infrastructure_error', 'Execution was cancelled before creating a container.');
   if (inspection.timedOut) return base('timeout', 'The execution runtime did not respond within the admitted time budget.');
-  if (inspection.exitCode !== 0 || !/^sha256:[a-f0-9]{64}$/.test(imageId)) return base('infrastructure_error', 'The Docker daemon or approved cached Python image is unavailable. No image is pulled automatically; saved work is unchanged.');
+  if (inspection.exitCode !== 0 || inspection.stdout.trim() !== imageId) return base('infrastructure_error', 'The exact admitted Python image is unavailable or mismatched. No image is pulled or substituted; saved work is unchanged.');
   const observations: TestObservation[] = [];
   let stdout = '', stderr = '', exitCode = 0;
   for (let index = 0; index < tests.length; index += 1) {

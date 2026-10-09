@@ -1,3 +1,4 @@
+import { fixtureRuntimeId } from './runtime-fixtures';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -89,7 +90,7 @@ describe('deterministic session ownership and mutation contracts', () => {
     session = (await service.requestRun('owner-a', session.id, mutation(session.revision))).session;
     const claim = await service.claimJob('worker');
     session = (await service.saveWorkspace('owner-a', session.id, { ...mutation(session.revision), files: { 'main.py': 'new work' } })).session;
-    await service.completeJob(claim!, { kind: 'run', run: { status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }] } });
+    await service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }] } });
     session = await service.getSession('owner-a', session.id);
     expect(session.runs[0].snapshotSha256).not.toBe(digest(session.files));
     expect(session.runs[0].testSuiteDigest).toBe(digest(scenario.tests));
@@ -97,14 +98,14 @@ describe('deterministic session ownership and mutation contracts', () => {
   it('rejects unknown runner tests instead of inventing evidence', async () => {
     const service = serviceFor(), session = await create(service);
     await service.requestRun('owner-a', session.id, mutation(session.revision)); const claim = await service.claimJob('worker');
-    await expect(service.completeJob(claim!, { kind: 'run', run: { status: 'completed', command: 'fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 1, tests: [{ id: 'invented', title: 'Invented', status: 'passed' }] } })).rejects.toMatchObject({ code: 'invalid' });
+    await expect(service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 1, tests: [{ id: 'invented', title: 'Invented', status: 'passed' }] } })).rejects.toMatchObject({ code: 'invalid' });
     expect((await service.getSession('owner-a', session.id)).runs).toHaveLength(0);
   });
   it('retains a completed check when a later check times out without claiming global success', async () => {
     const service = serviceFor(), session = await create(service);
     await service.requestRun('owner-a', session.id, mutation(session.revision));
     const claim = await service.claimJob('worker');
-    await service.completeJob(claim!, { kind: 'run', run: { status: 'timeout', command: 'fixture', stdout: '', stderr: 'Deadline expired', exitCode: null, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }, { id: 'private', title: 'Edge case', status: 'skipped', detail: 'No completed observation: time limit exceeded.' }] } });
+    await service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'timeout', command: 'fixture', stdout: '', stderr: 'Deadline expired', exitCode: null, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }, { id: 'private', title: 'Edge case', status: 'skipped', detail: 'No completed observation: time limit exceeded.' }] } });
     const run = (await service.getSession('owner-a', session.id)).runs[0];
     expect(run.status).toBe('timeout'); expect(run.tests.map(t => t.status)).toEqual(['passed', 'skipped']);
   });
@@ -140,7 +141,7 @@ describe('leases, cost admission, reports and deletion', () => {
     const claim = await service.claimJob('worker'), key = request();
     const cancelled = await service.cancelJob('owner-a', pending.job!.id, { requestId: key });
     expect(await service.cancelJob('owner-a', pending.job!.id, { requestId: key })).toEqual(cancelled);
-    expect(await service.completeJob(claim!, { kind: 'run', run: { status: 'timeout', command: 'fixture', stdout: '', stderr: '', exitCode: null, durationMs: 1, tests: [] } })).toBe(false);
+    expect(await service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'timeout', command: 'fixture', stdout: '', stderr: '', exitCode: null, durationMs: 1, tests: [] } })).toBe(false);
   });
   it('checks budget atomically and does not reset daily admission by deleting history', async () => {
     const service = serviceFor({ maxSessionUsd: 0.01, maxDailySessions: 1 }); const session = await create(service);

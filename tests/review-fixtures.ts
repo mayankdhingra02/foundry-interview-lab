@@ -1,3 +1,4 @@
+import { fixtureRuntimeId } from './runtime-fixtures';
 import { randomUUID } from 'node:crypto';
 import type { CoachOutput, Scenario } from '../lib/interview-practice/types';
 import { ReviewService } from '../lib/server/review-service';
@@ -16,7 +17,7 @@ export async function finalAttempt(context: ReturnType<typeof harness>, failCoac
   const { practice } = context;
   let session = (await practice.createSession(owner, { scenarioId: scenario.id, requestId: requestId() })).session;
   await practice.requestRun(owner, session.id, { requestId: requestId(), expectedRevision: session.revision }); const run = await practice.claimJob('fixture-worker');
-  await practice.completeJob(run!, { kind: 'run', run: { status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 1, durationMs: 1, tests: [{ id: 'smoke', title: 'Smoke', status: 'failed' }] } });
+  await practice.completeJob(run!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 1, durationMs: 1, tests: [{ id: 'smoke', title: 'Smoke', status: 'failed' }] } });
   session = await practice.getSession(owner, session.id);
   const finish = await practice.command(owner, session.id, { requestId: requestId(), expectedRevision: session.revision, action: 'finish' });
   await practice.cancelJob(owner, finish.job!.id, { requestId: requestId() }); session = await practice.getSession(owner, session.id);

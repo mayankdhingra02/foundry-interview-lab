@@ -1,3 +1,4 @@
+import { fixtureRuntimeId } from './runtime-fixtures';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -79,6 +80,25 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     const session = (await restricted.listSessions(ownerA))[0];
     const updates = await Promise.allSettled([service.saveWorkspace(ownerA, session.id, { ...mut(session.revision), files: { 'service.py': 'first' } }), service.saveWorkspace(ownerA, session.id, { ...mut(session.revision), files: { 'service.py': 'second' } })]);
     expect(updates.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+  });
+  it('persists an admitted immutable runtime and rejects repinning or mismatched completion atomically', async () => {
+    const session = await create();
+    const request = mut(session.revision), admitted = await service.requestRun(ownerA,session.id,request);
+    const second = new SessionService(new PostgresPracticeStore(servicePool),() => fixture,{ runtimeBinding: () => ({ version: 1,scenarioImage: fixture.runtime.image,imageAlias: fixture.runtime.image,imageId: `sha256:${'c'.repeat(64)}` }) });
+    expect(await second.requestRun(ownerA,session.id,request)).toEqual(admitted);
+    const stored = await service.exportSession(ownerA,session.id);
+    expect(stored.jobs[0].input.runtimeBinding).toMatchObject({ imageId: fixtureRuntimeId });
+    await expect(store.transaction(db => {
+      db.sessions[session.id].jobs[0].input.runtimeBinding = { version: 1,scenarioImage: fixture.runtime.image,imageAlias: fixture.runtime.image,imageId: `sha256:${'c'.repeat(64)}` };
+    })).rejects.toMatchObject({ code: 'conflict' });
+    expect(await service.exportSession(ownerA,session.id)).toEqual(stored);
+    const claim = (await second.claimJob('pinned-worker'))!;
+    const before = await store.read();
+    const run = { status: 'completed' as const,command: 'synthetic SQL fixture',stdout: '',stderr: '',exitCode: 0,tests: [],durationMs: 1 };
+    await expect(second.completeJob(claim,{ kind: 'run',run: { ...run,runtimeDigest: `sha256:${'c'.repeat(64)}` } })).rejects.toMatchObject({ code: 'invalid' });
+    expect(await store.read()).toEqual(before);
+    await expect(second.completeJob(claim,{ kind: 'run',run: { ...run,runtimeDigest: fixtureRuntimeId } })).resolves.toBe(true);
+    expect((await service.getSession(ownerA,session.id)).runs[0].runtimeDigest).toBe(fixtureRuntimeId);
   });
   it('fails closed on real per-table capacity overflow without truncating acknowledged evidence', async () => {
     const session = await create();
@@ -222,7 +242,7 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
   it('persists frozen debrief, deterministic runs and immutable report generations separately', async () => {
     let session = await create();
     await service.requestRun(ownerA, session.id, mut(session.revision)); const run = await service.claimJob('worker');
-    await service.completeJob(run!, { kind: 'run', run: { status: 'completed', command: 'synthetic fixture check', stdout: '', stderr: '', exitCode: 0, durationMs: 2, tests: [{ id: 'sum', title: 'Positive sum', status: 'failed' }] } });
+    await service.completeJob(run!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic fixture check', stdout: '', stderr: '', exitCode: 0, durationMs: 2, tests: [{ id: 'sum', title: 'Positive sum', status: 'failed' }] } });
     session = await service.getSession(ownerA, session.id);
     await service.command(ownerA, session.id, { ...mut(session.revision), action: 'finish' }); const question = await service.claimJob('worker');
     await service.completeJob(question!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'ask_probe', question: 'What did you check?', competencyId: 'correctness', evidenceIds: [], probeId: 'probe' } });
