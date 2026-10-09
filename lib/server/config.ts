@@ -12,8 +12,8 @@ export function authMode(): 'local' | 'supabase' | 'unconfigured' {
 export function capabilities() {
   const ai = enabled('FEATURE_AI_INTERVIEW', true) && Boolean(process.env.OPENAI_API_KEY);
   const runnerMode = process.env.RUNNER_MODE || 'docker';
-  const runner = enabled('FEATURE_EXECUTION', true) && (runnerMode === 'docker' ||
-    (runnerMode === 'remote' && Boolean(process.env.RUNNER_URL && process.env.RUNNER_AUTH_TOKEN)));
+  const health = runnerHealth();
+  const runner = enabled('FEATURE_EXECUTION', true) && health.configured && health.admitting;
   return {
     ai, interviewer: ai, assistant: ai, runner, accounts: authMode() === 'supabase',
     voice: enabled('FEATURE_VOICE') && Boolean(process.env.DEEPGRAM_API_KEY),
@@ -21,7 +21,7 @@ export function capabilities() {
     authMode: authMode(),
     details: {
       ai: ai ? 'Configured model inference. Quality qualification is tracked separately.' : 'Authored questions and observation-only reports; AI assistance is unavailable.',
-      runner: runner ? `${runnerMode} execution adapter configured. Runtime health is checked on each run.` : 'Execution is unavailable. Saved work remains accessible.',
+      runner: runner ? `${runnerMode} execution adapter configured. Runtime health is checked on each run.` : health.blockedReason || 'Execution is unavailable. Saved work remains accessible.',
       voice: 'Optional voice uses confirmed transcript turns. Text participation is always available.'
     }
   };
@@ -32,3 +32,5 @@ export function applicationOrigin(): string {
   if (!url) throw new Error('APP_URL must be configured.');
   return new URL(url).origin;
 }
+import { runnerHealth } from '../runtime/runner';
+
