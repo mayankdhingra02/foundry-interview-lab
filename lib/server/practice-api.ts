@@ -9,6 +9,7 @@ import { kickLocalWorker } from './worker';
 import { exportPracticeSession } from './export';
 import { streamEvents } from './event-stream';
 import { handleVoiceRequest } from '../voice/api';
+import { executionAdmissionOpen } from './operations';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
@@ -74,7 +75,7 @@ export async function practiceApi(request: Request, path: string[]) {
     else if (method === 'POST' && operation === 'commands') result = await service.command(actor.id, id, parsed(mutation.extend({ action: z.enum(['advance', 'pause', 'resume', 'finish', 'submit']) }), body));
     else if (method === 'POST' && operation === 'turns') result = await service.commitTurn(actor.id, id, parsed(mutation.extend({ text: z.string().min(1).max(6000), source: z.enum(['typed', 'transcribed', 'corrected']).optional(), replyTo: z.string().optional() }), body));
     else if (method === 'POST' && operation === 'runs') {
-      if (!capabilities().runner) throw new HttpError(503, 'runner_unavailable', 'Execution is not configured. Your work is saved.');
+      if (!capabilities().runner || !await executionAdmissionOpen()) throw new HttpError(503, 'runner_unavailable', 'Execution is unavailable or on an operational hold. Your work is saved.');
       result = await service.requestRun(actor.id, id, parsed(mutation, body));
     } else if (method === 'POST' && operation === 'assistant') {
       if (!capabilities().assistant) throw new HttpError(503, 'assistant_unavailable', 'AI assistance is not configured.');

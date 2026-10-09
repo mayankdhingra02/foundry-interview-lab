@@ -19,3 +19,76 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+  isolated-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Deliberate CI image provisioning; learner execution never pulls images.
+      - run: docker pull python:3.11-slim
+      - run: docker pull postgres:16-alpine
+      - run: FOUNDRY_DOCKER_INTEGRATION=1 npm test -- tests/runner.test.ts
+      - run: RUN_POSTGRES_INTEGRATION=1 npm test -- tests/postgres.integration.test.ts tests/billing.integration.test.ts tests/voice-postgres.integration.test.ts
+      - run: FOUNDRY_OPERATIONS_QUALIFICATION=1 node --conditions=react-server --import tsx scripts/operations/qualify.ts --output work/operations-qualification.json
+      - run: node --conditions=react-server --import tsx scripts/operations/reconcile.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: disposable-operations-qualification
+          path: work/operations-qualification.json
+          if-no-files-found: ignore
+          retention-days: 7
+  browser-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:3134
+      PLAYWRIGHT_CHANNEL: chromium
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: docker pull python:3.11-slim
+      - name: Configure synthetic local identity without printing its secret
+        run: |
+          mkdir -p work
+          node -e 'const fs=require("fs"),crypto=require("crypto");fs.writeFileSync(".env.local",["AUTH_MODE=local","APP_URL=http://127.0.0.1:3134","SESSION_SECRET="+crypto.randomBytes(32).toString("hex"),"PRACTICE_DATA_PATH=./work/e2e/practice.json","DATABASE_URL=","OPENAI_API_KEY=","FEATURE_AI_INTERVIEW=false","FEATURE_EXECUTION=true","FEATURE_VOICE=false","FEATURE_BILLING=false","RUNNER_MODE=docker","PYTHON_IMAGE=python:3.11-slim"].join("\n")+"\n",{mode:384})'
+      - name: Start local development server
+        run: |
+          npm run dev -- --port 3134 > work/e2e-server.log 2>&1 &
+          echo $! > work/e2e-server.pid
+          curl --fail --retry 60 --retry-delay 1 --retry-all-errors http://127.0.0.1:3134/api/health > /dev/null
+      - run: npm run test:e2e
+      - name: Stop local server
+        if: always()
+        run: |
+          if [ -f work/e2e-server.pid ]; then kill "$(cat work/e2e-server.pid)" || true; fi
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: synthetic-browser-recovery
+          path: test-results/
+          retention-days: 7
+  deployment-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: docker build --target web --tag foundry-lab-ops-qualification:web .
+      - run: docker build --target worker --tag foundry-lab-ops-qualification:worker .
+      - run: FOUNDRY_CONTAINER_SMOKE=1 node --conditions=react-server --import tsx scripts/operations/container-smoke.ts

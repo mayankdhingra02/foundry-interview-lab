@@ -3,15 +3,40 @@ import { getScenario } from '../lib/content/scenarios';
 import { MemoryPracticeStore } from '../lib/server/store';
 import { SessionService } from '../lib/server/session-service';
 import { processOneJob } from '../lib/server/worker';
+import * as operations from '../lib/server/operations';
+import * as runtime from '../lib/runtime/runner';
 
 const scenario = getScenario('monetary-validation')!;
 let counter = 0;
 const requestId = () => `worker-test-${++counter}`;
 beforeEach(() => { vi.stubEnv('OPENAI_API_KEY', 'fixture-not-a-real-key'); vi.stubEnv('FEATURE_AI_INTERVIEW', 'true'); });
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 const response = (files: Array<{path:string;content:string}> = []) => new Response(JSON.stringify({ status: 'completed', model: 'fixture-model', usage: { input_tokens: 100, output_tokens: 100 }, output: [{ content: [{ type: 'output_text', text: JSON.stringify({ message: 'Fixture proposal', files }) }] }] }));
 
 describe('durable worker integration', () => {
+  it('does not execute already queued work when shared operational admission closes', async () => {
+    vi.spyOn(operations, 'executionAdmissionOpen').mockResolvedValue(false);
+    const execute = vi.spyOn(runtime, 'executeScenario');
+    const service = new SessionService(new MemoryPracticeStore(), getScenario);
+    const session = (await service.createSession('owner', { scenarioId: scenario.id, requestId: requestId() })).session;
+    await service.requestRun('owner', session.id, { requestId: requestId(), expectedRevision: session.revision });
+    await processOneJob(service);
+    const saved = await service.getSession('owner', session.id);
+    expect(execute).not.toHaveBeenCalled();
+    expect(saved.runs[0]).toMatchObject({ status: 'infrastructure_error', tests: [], exitCode: null });
+  });
+  it('shares a cleanup hold while retaining the actual failed execution observation', async () => {
+    vi.spyOn(operations, 'executionAdmissionOpen').mockResolvedValue(true);
+    const block = vi.spyOn(operations, 'blockExecutionAdmission').mockResolvedValue();
+    vi.spyOn(runtime, 'runnerHealth').mockReturnValue({ configured: true, admitting: false, blockedReason: 'cleanup_unconfirmed' });
+    vi.spyOn(runtime, 'executeScenario').mockResolvedValue({ status: 'infrastructure_error', command: 'fixture execution', stdout: '', stderr: 'Cleanup unconfirmed.', exitCode: null, tests: [], durationMs: 10 });
+    const service = new SessionService(new MemoryPracticeStore(), getScenario);
+    const session = (await service.createSession('owner', { scenarioId: scenario.id, requestId: requestId() })).session;
+    await service.requestRun('owner', session.id, { requestId: requestId(), expectedRevision: session.revision });
+    await processOneJob(service);
+    expect(block).toHaveBeenCalledOnce();
+    expect((await service.getSession('owner', session.id)).runs[0].stderr).toBe('Cleanup unconfirmed.');
+  });
   it('finishes debrief and produces an unassessed report when quota cannot fund inference', async () => {
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     const service = new SessionService(new MemoryPracticeStore(), getScenario, { maxSessionUsd: 0.001 });
