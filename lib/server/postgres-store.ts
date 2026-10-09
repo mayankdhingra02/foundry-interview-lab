@@ -277,11 +277,25 @@ export class PostgresPracticeStore implements PracticeStore {
     const deletion = next.find(s => s.table === 'ai_practice_deletions')!;
     await this.sync(client, deletion, previous.find(s => s.table === deletion.table)!);
     for (const old of Object.values(before.sessions)) if (!after.sessions[old.id]) await client.query('delete from public.ai_practice_sessions where id=$1 and user_id=$2', [old.id, old.ownerId]);
+    // Verify every represented package, including unchanged sessions/replays,
+    // with two bounded requests rather than two roundtrips per saved session.
+    const manifests = new Map<string, { scenario_id: string; version: string; manifest: Session['scenario']; manifest_sha256: string }>();
     for (const session of Object.values(after.sessions)) {
-      const manifestHash = digest(session.scenario);
-      await client.query('insert into public.practice_scenario_versions(scenario_id,version,manifest,manifest_sha256,published) values ($1,$2,$3,$4,true) on conflict (scenario_id,version) do nothing', [session.scenarioId, session.scenarioVersion, json(session.scenario), manifestHash]);
-      const recorded = await client.query<{ manifest_sha256: string }>('select manifest_sha256 from public.practice_scenario_versions where scenario_id=$1 and version=$2', [session.scenarioId, session.scenarioVersion]);
-      if (recorded.rows[0]?.manifest_sha256 !== manifestHash) throw new DomainError('conflict', 'Published scenario version is immutable.');
+      const key = json([session.scenarioId, session.scenarioVersion]), manifestHash = digest(session.scenario);
+      if (manifests.has(key) && manifests.get(key)!.manifest_sha256 !== manifestHash) throw new DomainError('conflict', 'Published scenario version is immutable.');
+      manifests.set(key, { scenario_id: session.scenarioId, version: session.scenarioVersion, manifest: session.scenario, manifest_sha256: manifestHash });
+    }
+    if (manifests.size) {
+      const packages = [...manifests.values()];
+      await client.query('insert into public.practice_scenario_versions(scenario_id,version,manifest,manifest_sha256,published) select scenario_id,version,manifest,manifest_sha256,true from jsonb_to_recordset($1::jsonb) as admitted(scenario_id text,version text,manifest jsonb,manifest_sha256 text) where true on conflict (scenario_id,version) do nothing', [json(packages)]);
+      const recorded = await client.query<{ scenario_id: string; version: string; manifest_sha256: string }>('select versions.scenario_id,versions.version,versions.manifest_sha256 from public.practice_scenario_versions as versions join jsonb_to_recordset($1::jsonb) as admitted(scenario_id text,version text) using(scenario_id,version)', [json(packages.map(({ scenario_id, version }) => ({ scenario_id, version })))]);
+      const checked = new Set<string>();
+      for (const row of recorded.rows) {
+        const key = json([row.scenario_id, row.version]);
+        if (checked.has(key) || manifests.get(key)?.manifest_sha256 !== row.manifest_sha256) throw new DomainError('conflict', 'Published scenario version is immutable.');
+        checked.add(key);
+      }
+      if (checked.size !== manifests.size) throw new DomainError('conflict', 'Published scenario version is immutable.');
     }
     for (const spec of next) {
       if (spec.table === 'ai_practice_deletions') continue;
@@ -312,7 +326,7 @@ export class PostgresPracticeStore implements PracticeStore {
       const present = [...tables, ...(reviewReady ? reviewTables : [])], counts = await this.preflight(client, present);
       // SQL produces only table names and counts. No private JSON is transferred
       // or logged; full and projected sizes describe the exact same SQL snapshot.
-      const result = await client.query<{ table_name: string; count: string; full_bytes: string; projected_bytes: string }>(present.map(table => `select '${table}'::text as table_name,count(*)::text as count,coalesce(sum(octet_length(to_jsonb(source)::text)),0)::text as full_bytes,coalesce(sum(octet_length(to_jsonb(projected)::text)),0)::text as projected_bytes from public.${table} as source cross join lateral (select ${readColumns[table].map(column => `source.${column}`).join(',')}) as projected`).join(' union all '));
+      const result = await client.query<{ table_name: string; count: string; full_bytes: string; projected_bytes: string }>(present.map(table => `select '${table}'::text as table_name,count(*)::text as count,coalesce(sum(octet_length(to_jsonb(transport_source)::text)),0)::text as full_bytes,coalesce(sum(octet_length(to_jsonb(projected)::text)),0)::text as projected_bytes from public.${table} as transport_source cross join lateral (select ${readColumns[table].map(column => `transport_source.${column}`).join(',')}) as projected`).join(' union all '));
       const seen = new Set<string>(), metrics: LoadTransportMetrics = { entityRows: 0, fullRowJsonBytes: 0, projectedRowJsonBytes: 0 };
       for (const row of result.rows) {
         const count = Number(row.count), full = Number(row.full_bytes), projected = Number(row.projected_bytes);
