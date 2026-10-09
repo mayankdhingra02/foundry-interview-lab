@@ -85,6 +85,33 @@ describe('authenticated practice HTTP contracts', () => {
     expect((await api(`sessions/${session.id}/interaction`, 'POST', body, {}, localIdentityCookie().cookie)).status).toBe(404);
     expect((await api(`sessions/${session.id}/interaction`, 'POST', { ...body, requestId: requestId(), ownerId: 'forged' })).status).toBe(400);
   });
+  it('returns an owner-only provisional plan and validates bounded authored goal IDs', async () => {
+    const response = await api('progress?competency=money-validation&competency=money-correctness&competency=money-validation');
+    expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toContain('no-store');
+    const plan = await response.json();
+    expect(plan.studyPlan.status).toBe('cold-start');
+    expect(plan.studyPlan.selectedCompetencies).toEqual(['money-correctness', 'money-validation']);
+    expect(plan.studyPlan.steps.length).toBeLessThanOrEqual(3); expect(plan.details.attempts).toBe(0);
+    expect((await api('progress?competency=verification')).status).toBe(400); // Internal transfer aliases are not public criteria.
+    expect((await api(`progress?${Array.from({ length: 21 }, () => 'competency=money-validation').join('&')}`)).status).toBe(400);
+    expect((await api('progress?competency=')).status).toBe(400);
+    expect((await api('progress', 'GET', undefined, {}, null)).status).toBe(401);
+  });
+  it('allows a saved retired criterion only for the owner whose attempt defines it', async () => {
+    const retired = (id: string, criterion: string) => {
+      const scenario = structuredClone(getScenario('monetary-validation')!);
+      scenario.id = id; scenario.rubric[0].id = criterion; return scenario;
+    };
+    const owned = retired('retired-owner-task', 'retired-owner-criterion'), other = retired('retired-other-task', 'retired-other-criterion');
+    service = new SessionService(new MemoryPracticeStore(), id => id === owned.id ? owned : id === other.id ? other : getScenario(id));
+    await service.createSession(ownerId, { scenarioId: owned.id, requestId: requestId() });
+    await service.createSession(localIdentityCookie().actor.id, { scenarioId: other.id, requestId: requestId() });
+    const response = await api('progress?competency=retired-owner-criterion'); expect(response.status).toBe(200);
+    const plan = await response.json(); expect(plan.details.attempts).toBe(1);
+    expect(plan.studyPlan.selectedCompetencies).toEqual(['retired-owner-criterion']);
+    expect(plan.recommendations.some((item: { scenarioId: string }) => item.scenarioId.startsWith('retired-'))).toBe(false);
+    expect((await api('progress?competency=retired-other-criterion')).status).toBe(400);
+  });
   it('replays committed sequence IDs through SSE and closes on reader cancellation', async () => {
     const session = await create();
     const response = await api(`sessions/${session.id}/events`, 'GET', undefined, { accept: 'text/event-stream' });

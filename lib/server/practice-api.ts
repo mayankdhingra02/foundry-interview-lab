@@ -14,6 +14,7 @@ import { ownerReviews, ownerReviewConsent } from './review-api';
 import { getReviewService } from './review-service';
 import { InteractionService } from './interactions';
 import type { SessionMutationResult } from './session-service';
+import { buildProgression } from '../interview-practice/progression';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
@@ -34,15 +35,11 @@ export async function practiceApi(request: Request, path: string[]) {
     if (path[0] === 'reviews' && path[1] && path[2] === 'consent' && path.length === 3) return ownerReviewConsent(request, path[1]);
     if (path.length === 1 && path[0] === 'progress' && method === 'GET') {
       const sessions = await service.listSessions(actor.id);
-      const skills = new Map<string, { id: string; name: string; observations: number; lastObservedAt: string; level: string; levels: Record<string, number> }>();
-      for (const session of [...sessions].reverse()) for (const finding of session.reports.at(-1)?.rubric ?? []) {
-        if (finding.level === 'Not observed') continue;
-        const row = skills.get(finding.criterionId) ?? { id: finding.criterionId, name: session.scenario.rubric.find(r => r.id === finding.criterionId)?.name || finding.criterionId, observations: 0, lastObservedAt: session.updatedAt, level: finding.level, levels: {} };
-        row.observations += 1; row.level = finding.level; row.lastObservedAt = session.updatedAt; row.levels[finding.level] = (row.levels[finding.level] || 0) + 1; skills.set(row.id, row);
-      }
-      const completed = new Set(sessions.map(s => s.scenarioId));
-      const recommendations = listScenarios().map(s => ({ scenarioId: s.id, title: s.title, fresh: !completed.has(s.id), reason: completed.has(s.id) ? 'Repeat for deliberate practice; familiarity is recorded.' : 'An unseen scenario for a fresh practice attempt.' })).sort((a, b) => Number(b.fresh) - Number(a.fresh));
-      return privateJson({ skills: [...skills.values()], recommendations });
+      const catalog = listScenarios().map(toPublicScenario);
+      const goals = parsed(z.array(z.string().min(1).max(100)).max(20), new URL(request.url).searchParams.getAll('competency'));
+      const known = new Set([...catalog, ...sessions.map(session => session.scenario)].flatMap(scenario => scenario.rubric.map(criterion => criterion.id)));
+      if (goals.some(id => !known.has(id))) throw new HttpError(400, 'unknown_competency', 'Choose authored criteria from the catalog or your saved attempts.');
+      return privateJson(buildProgression(sessions, catalog, { selectedCompetencies: goals }));
     }
     if (path[0] === 'sessions' && path.length === 1) {
       if (method === 'GET') return privateJson({ sessions: await service.listSessions(actor.id) });
