@@ -116,11 +116,15 @@ test("settings exports and deletes private practice content with the retention d
   const submitted = deletion.request().postDataJSON();
   expect(submitted.requestId).toMatch(/^[a-zA-Z0-9_-]{8,128}$/);
   expect(deletionKeys).toHaveLength(2); expect(deletionKeys[0]).toBe(deletionKeys[1]);
+  // Local DELETE clears its development identity. The acknowledged deletion
+  // must retain browser data until explicit, scoped browser-only cleanup.
+  await expect(dialog.getByRole("alert")).toContainText("Deletion was acknowledged for the original account. Browser cleanup is pending");
+  await expect(dialog.getByRole("button", { name: "Delete Interview Lab data", exact: true })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Clear acknowledged browser data", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByText("Your private Interview Lab content was deleted. Limited usage counters and your shared sign-in are preserved.", { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("settings-data-deleted.png"), fullPage: true });
-  // Restore this test's own development cookie to verify its former private
-  // content is gone even though DELETE clears the browser's local identity.
+  // Restore only for backend verification, after the normal local cleanup UI.
   await page.context().addCookies(originalCookies);
   const remaining = await page.request.get("/api/interview-practice/sessions");
   expect((await remaining.json()).sessions).toEqual([]);

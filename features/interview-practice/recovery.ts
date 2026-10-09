@@ -4,7 +4,7 @@ import { ApiError } from "./client";
 import type { SessionView } from "@/lib/interview-practice/types";
 
 export const pendingStoragePrefix = "foundry-practice-pending:";
-export type PendingRequest = { payload: string; uncertain: boolean; createdAt: string; title?: string; scenarioVersion?: string };
+export type PendingRequest = { payload: string; uncertain: boolean; createdAt: string; title?: string; scenarioVersion?: string; acknowledged?: boolean; draftSessionIds?: string[] };
 export type PendingIntent = { path: string; body: Record<string, unknown>; operationRequestId?: string };
 const paths = new Set(["commands", "hints", "runs", "assistant", "turns", "edit-decisions", "drills", "reports", "interaction", "cancel-job", "undo-edit"]);
 const maxEntries = 20;
@@ -40,6 +40,11 @@ function validEntry(intent: string, value: unknown, scope: string): value is Pen
     if (scope === "creation") {
       const allowed = new Set(["scenarioId", "mode", "role", "level", "skills", "targetMinutes", "aiHelp", "voice", "requestId"]);
       return intent === "create" && Object.keys(wire).every(key => allowed.has(key)) && text(wire.scenarioId, 100) && ["practice", "simulation"].includes(String(wire.mode)) && text(wire.role, 120) && text(wire.level, 100) && Array.isArray(wire.skills) && wire.skills.length <= 20 && wire.skills.every(skill => text(skill, 100)) && Number.isInteger(wire.targetMinutes) && Number(wire.targetMinutes) >= 5 && Number(wire.targetMinutes) <= 180 && typeof wire.aiHelp === "boolean" && typeof wire.voice === "boolean";
+    }
+    if (scope === "delete-account" || /^delete-session:[a-zA-Z0-9_-]{1,128}$/.test(scope)) {
+      return (value.acknowledged === undefined || typeof value.acknowledged === "boolean") && (value.draftSessionIds === undefined || (Array.isArray(value.draftSessionIds) && value.draftSessionIds.length <= 50 && value.draftSessionIds.every(id => typeof id === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(id)) && new Set(value.draftSessionIds).size === value.draftSessionIds.length)) && intent === "delete" && (scope === "delete-account"
+        ? Object.keys(wire).length === 2 && wire.confirmation === "DELETE"
+        : Object.keys(wire).length === 1);
     }
     const semantic = pendingIntent(intent);
     if (!semantic || !Number.isInteger(wire.expectedRevision) || Number(wire.expectedRevision) < 0) return false;
@@ -79,8 +84,25 @@ export function writePendingRequests(ownerId: string, scope: string, requests: M
 export function clearSessionPracticeRecovery(ownerId: string, sessionId: string): boolean {
   let complete = true;
   try { sessionStorage.removeItem(storageKey(ownerId, `session:${sessionId}`)); } catch { complete = false; }
+  try { sessionStorage.removeItem(storageKey(ownerId, `delete-session:${sessionId}`)); } catch { complete = false; }
   try { localStorage.removeItem(`foundry-practice-draft:${sessionId}`); } catch { complete = false; }
   return complete;
+}
+export function readPendingSessionDeletions(ownerId: string): Array<{ sessionId: string; request: PendingRequest }> {
+  const prefix = `${pendingStoragePrefix}${encodeURIComponent(ownerId)}:`;
+  const scopes: string[] = [];
+  try {
+    for (let index = 0; index < sessionStorage.length; index++) {
+      const key = sessionStorage.key(index); if (!key?.startsWith(prefix)) continue;
+      const scope = decodeURIComponent(key.slice(prefix.length));
+      if (/^delete-session:[a-zA-Z0-9_-]{1,128}$/.test(scope)) scopes.push(scope);
+      if (scopes.length > 32) throw new Error();
+    }
+  } catch { throw new Error("Browser deletion recovery is unavailable. Review saved attempts before retrying deletion."); }
+  return scopes.flatMap(scope => {
+    const request = readPendingRequests(ownerId, scope).get("delete");
+    return request ? [{ sessionId: scope.slice("delete-session:".length), request }] : [];
+  });
 }
 export function reconcilePendingCreation(ownerId: string, sessions: Pick<SessionView, "events">[]): boolean {
   const pending = readPendingRequests(ownerId, "creation").get("create");
@@ -91,6 +113,15 @@ export function reconcilePendingCreation(ownerId: string, sessions: Pick<Session
   // Matching a title, timestamp, or configuration would not prove admission.
   writePendingRequests(ownerId, "creation", new Map());
   return true;
+}
+export function clearOwnerPracticeRecovery(ownerId: string, draftSessionIds: readonly string[]): boolean {
+  if (draftSessionIds.length > 50 || draftSessionIds.some(id => !/^[a-zA-Z0-9_-]{1,128}$/.test(id))) return false;
+  let complete = true; const prefix = `${pendingStoragePrefix}${encodeURIComponent(ownerId)}:`;
+  try { for (let index = sessionStorage.length - 1; index >= 0; index--) { const key = sessionStorage.key(index); if (key?.startsWith(prefix)) sessionStorage.removeItem(key); } } catch { complete = false; }
+  // Only IDs captured from the intended owner's authenticated history are
+  // eligible. Never sweep another account's legacy ownerless draft keys.
+  for (const id of draftSessionIds) { try { localStorage.removeItem(`foundry-practice-draft:${id}`); } catch { complete = false; } }
+  return complete;
 }
 export function clearBrowserPracticeRecovery(): boolean {
   let complete = true;
