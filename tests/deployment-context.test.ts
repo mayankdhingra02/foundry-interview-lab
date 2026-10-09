@@ -78,7 +78,7 @@ describe('deployment build-context boundary', () => {
       'evals/fixtures/future-candidates.json', 'evals/fixtures/human-review.completed.json', 'evals/fixtures/new-captures.json',
       'evals/fixtures/private/reviewer-notes.json', 'evals/fixtures/work/raw-capture.json', 'evals/new-benchmark.ts',
       'evals/.private.json', 'evals/fixtures/.reviewer-notes.json', 'evals/.work/candidates.json',
-      'scripts/evaluate.ts', 'scripts/benchmark-models.ts', 'scripts/review-role-models.ts', 'scripts/acceptance-corpus.ts', 'evals/private-corpus.ts', 'evals/role-runner.ts', 'evals/role-review.ts', '.env.production', 'work/capture.json', 'data/practice.json', 'tests/evaluation-api.test.ts',
+      'scripts/evaluate.ts', 'scripts/benchmark-models.ts', 'scripts/review-role-models.ts', 'scripts/acceptance-corpus.ts', 'scripts/private-model-evaluation.ts', 'evals/private-corpus.ts', 'evals/private-role-runner.ts', 'evals/private-role-review.ts', 'evals/role-runner.ts', 'evals/role-review.ts', '.env.production', 'work/capture.json', 'data/practice.json', 'tests/evaluation-api.test.ts',
     ]) expect(contextIncludes(path), path).toBe(false);
   });
 

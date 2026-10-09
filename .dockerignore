@@ -33,5 +33,6 @@ scripts/evaluate.ts
 scripts/benchmark-models.ts
 scripts/review-role-models.ts
 scripts/acceptance-corpus.ts
+scripts/private-model-evaluation.ts
 tests
 .DS_Store
