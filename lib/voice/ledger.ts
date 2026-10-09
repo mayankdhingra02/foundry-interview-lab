@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { assertActive, assertRequestId, DomainError, ownedSession } from '../interview-practice/domain';
+import { budgetTotals } from '../interview-practice/quota';
 import type { LedgerEntry, PracticeDatabase } from '../interview-practice/types';
 import { HttpError } from '../server/http';
 import type { PracticeStore } from '../server/store';
@@ -29,7 +30,7 @@ function append(database: PracticeDatabase, reservation: VoiceReservation, state
   database.ledger.push({
     id: randomUUID(), ownerId: reservation.ownerId, sessionId: reservation.sessionId,
     operationId: `${reservation.key}:${state}`, kind: state === 'reserved' ? 'reservation' : state === 'settled' ? 'settlement' : 'uncertain',
-    amountUsd: state === 'reserved' ? reservation.usd : 0, createdAt: at,
+    amountUsd: state === 'reserved' ? reservation.usd : 0, createdAt: at, budgetAt: reservation.at,
     voice: { version: 1, key: reservation.key, operation: reservation.operation, requestId: reservation.requestId,
       fingerprint: reservation.fingerprint, seconds: reservation.seconds, characters: reservation.characters,
       reservedUsd: reservation.usd, state }
@@ -43,7 +44,6 @@ export async function reserveVoice(store: PracticeStore, config: VoiceConfig, in
     const session = ownedSession(database.sessions, input.ownerId, input.sessionId); assertActive(session);
     const voice = postings(database); const at = now.toISOString(); const day = at.slice(0, 10);
     if (voice.some(entry => entry.ownerId === input.ownerId && entry.voice.requestId === input.requestId)) throw new DomainError('conflict', 'This audio request was already admitted. Its result is not stored for replay. Continue in text or make a new recording.');
-    const today = database.ledger.filter(entry => entry.createdAt.slice(0, 10) === day);
     const dailyVoice = voice.filter(entry => entry.createdAt.slice(0, 10) === day);
     const retainedSeconds = session.usage.voiceAllocatedSeconds;
     if (retainedSeconds !== undefined && (!Number.isFinite(retainedSeconds) || retainedSeconds < 0)) throw new DomainError('unavailable', 'Voice usage counters need operator review. Continue in text.');
@@ -51,8 +51,7 @@ export async function reserveVoice(store: PracticeStore, config: VoiceConfig, in
     const userSeconds = usage(dailyVoice.filter(entry => entry.ownerId === input.ownerId));
     const globalSeconds = usage(dailyVoice);
     const sessionUsd = session.usage.reservedUsd + session.usage.spentUsd + session.usage.uncertainUsd;
-    const userUsd = today.filter(entry => entry.ownerId === input.ownerId).reduce((sum, entry) => sum + entry.amountUsd, 0);
-    const globalUsd = today.reduce((sum, entry) => sum + entry.amountUsd, 0);
+    const { userDailyUsd: userUsd, globalDailyUsd: globalUsd } = budgetTotals(database.ledger, input.ownerId, at);
     const terminal = new Set(voice.filter(entry => entry.voice.state !== 'reserved').map(entry => entry.voice.key));
     const pending = voice.filter(entry => entry.voice.state === 'reserved' && !terminal.has(entry.voice.key));
     if (pending.length >= 32 || pending.filter(entry => entry.ownerId === input.ownerId).length >= 2) throw new DomainError('quota', 'A voice request is already in progress. Continue in text and try again later.');
