@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { canonical, digest, DomainError, requestKey } from '../interview-practice/domain';
 import type { EvidenceManifest, PracticeDatabase, ReviewDatabase, Session } from '../interview-practice/types';
 import { emptyDatabase, validateStoredEvents, type PracticeStore } from './store';
+import { HttpError } from './http';
 
 type EntityRow = { key: string; columns: Record<string, unknown>; value: unknown };
 type TableSpec = { table: string; keys: string[]; rows: EntityRow[] };
@@ -247,7 +248,7 @@ export class PostgresPracticeStore implements PracticeStore {
       const result = await this.load(client); await client.query('commit'); return structuredClone(result);
     } catch (error) {
       await client?.query('rollback').catch(() => undefined);
-      if (error instanceof DomainError) throw error; throw unavailable();
+      if (error instanceof DomainError || error instanceof HttpError) throw error; throw unavailable();
     } finally { client?.release(); }
   }
   async transaction<T>(operation: (database: PracticeDatabase) => T | Promise<T>): Promise<T> {
@@ -259,7 +260,7 @@ export class PostgresPracticeStore implements PracticeStore {
       await this.persist(client, before, database); await client.query('commit'); return structuredClone(result);
     } catch (error) {
       await client?.query('rollback').catch(() => undefined);
-      if (error instanceof DomainError) throw error; throw unavailable();
+      if (error instanceof DomainError || error instanceof HttpError) throw error; throw unavailable();
     } finally { client?.release(); }
   }
   /** Trusted extensions can join the current transaction; never retain this client beyond the callback. */
