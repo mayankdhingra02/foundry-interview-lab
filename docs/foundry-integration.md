@@ -1,0 +1,13 @@
+# Foundry lesson navigation
+
+`GET /api/interview-practice/progress` resolves the exact five source-reviewed lesson mappings against the server runtime `FOUNDRY_SITE_ORIGIN`. Leave it unset until the deployment owner selects and verifies the main Foundry host. Missing or invalid configuration keeps the learner's plan and saved attempts available, with a visible navigation-unavailable state and no lesson link. Configuration errors never echo a credential-bearing origin.
+
+The value must be a canonical HTTPS origin, optionally ending in `/`, without credentials, a path prefix, query, fragment or whitespace. Nondefault HTTPS ports are preserved. HTTP is allowed only for `localhost`, `127.0.0.1` and `[::1]` outside production. Examples: `https://your-foundry-host.example` or local development `http://127.0.0.1:3001`. This is a server variable, so a promoted image reads the deployment's runtime host rather than a build-time `NEXT_PUBLIC_` value.
+
+Only an exact authored lesson ID and path can become a link. There is no model-supplied URL, redirect endpoint, arbitrary return URL, server-side fetch, forwarded cookie, account token, learner ID or attempt content in the destination. A lesson opens in a separate tab with `noopener noreferrer` and no referrer; the practice page stays open. Opening a lesson does not create completion or skill evidence. Authenticated progress retains owner checks and `private, no-store` responses.
+
+The standalone application already supports Supabase verified identity. A deployment may deliberately configure the same approved Supabase project as Foundry and qualify each application's sign-in callbacks, cookie/domain policy and account lifecycle. This change does not establish cross-origin SSO, copy Foundry credentials, modify the original Foundry repository, or claim that a configured host is live. A learner may need to sign in on the destination.
+
+Before enabling the links for learners, verify all five destination pages at the chosen host, return navigation, accessibility and signed-in/signed-out behavior. Shared identity, main-site navigation back into Interview Lab, hosted availability and actual lesson completion remain deployment integration work. Source mappings were reviewed on October 9, 2026; later Foundry route changes require a reviewed mapping update.
+
+Deterministic checks cover missing/invalid configuration, exact route allowlisting, runtime configuration, private-data-free URLs and immutability of the underlying progression plan. Browser checks use intercepted contract fixtures for both unavailable and configured links, including keyboard activation and narrow layout. They do not contact or qualify a live Foundry site.

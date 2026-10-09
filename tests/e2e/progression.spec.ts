@@ -20,7 +20,7 @@ function recordedAttempts() {
   const correction = structuredClone(repeated.reports[0]); correction.id = 'corrected-report'; correction.model = 'staff-reviewed'; correction.createdAt = '2026-11-02T12:00:00.000Z'; correction.correction = { sourceReportId: repeated.reports[0].id, reason: 'Synthetic correction.', publishedAt: correction.createdAt }; repeated.reports.push(correction);
   return [first, repeated];
 }
-async function fixture(page: Page, options: { sessions?: SessionView[]; catalog?: PublicScenario[]; catalogFailure?: boolean } = {}) {
+async function fixture(page: Page, options: { sessions?: SessionView[]; catalog?: PublicScenario[]; catalogFailure?: boolean; lessonOrigin?: string } = {}) {
   const sessions = options.sessions || []; const tasks = options.catalog || catalog; const requests: string[][] = [];
   await page.route('**/api/**', route => route.fulfill({ status: 501, json: { error: { message: `Unexpected fixture request: ${route.request().url()}` } } }));
   await page.route('**/api/auth/session', route => route.fulfill({ json: { user: { id: 'progression-fixture-owner', local: false }, authMode: 'supabase' } }));
@@ -30,7 +30,9 @@ async function fixture(page: Page, options: { sessions?: SessionView[]; catalog?
     const ids = new URL(route.request().url()).searchParams.getAll('competency'); requests.push(ids);
     const known = new Set([...tasks, ...sessions.map(item => item.scenario)].flatMap(task => task.rubric.map(row => row.id)));
     if (ids.length > 20 || ids.some(id => !known.has(id))) return route.fulfill({ status: 400, json: { error: { message: 'Choose only available practice criteria, or clear the selection.' } } });
-    return route.fulfill({ json: buildProgression(sessions, tasks, { selectedCompetencies: ids }) });
+    const result = buildProgression(sessions, tasks, { selectedCompetencies: ids });
+    if (options.lessonOrigin) for (const step of result.studyPlan.steps) if (step.kind === 'lesson') step.navigation = { status: 'available', href: options.lessonOrigin + step.foundryPath };
+    return route.fulfill({ json: result });
   });
   return requests;
 }
@@ -112,4 +114,24 @@ test('configured local progress API serves cold start and selected authored goal
   const data = await result.json(); expect(data.studyPlan.selectedCompetencies).toHaveLength(1); expect(data.studyPlan.status).toBe('cold-start'); expect(data.studyPlan.steps.length).toBeLessThanOrEqual(3);
   await expect(page).toHaveURL(/competency=/); await expect(page.getByRole('heading', { name: 'Start collecting practice evidence' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('actual-local-selected-goal.png'), fullPage: true });
+});
+
+
+test('configured lesson opens separately by keyboard without a referrer or practice data', async ({ page, context }, testInfo) => {
+  const destinations: { url: string; referrer: string | undefined }[] = [];
+  await context.route('https://foundry.example/**', route => {
+    destinations.push({ url: route.request().url(), referrer: route.request().headers()['referer'] });
+    return route.fulfill({ contentType: 'text/html', body: '<title>Foundry destination fixture</title><h1>Related lesson fixture</h1>' });
+  });
+  await fixture(page, { sessions: recordedAttempts(), lessonOrigin: 'https://foundry.example' }); await page.goto('/progress');
+  const link = page.getByRole('link', { name: 'Open Foundry lesson' }); await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute('href', 'https://foundry.example/low-level-design/lessons/state-lifecycle-errors');
+  await expect(link).toHaveAttribute('target', '_blank'); await expect(link).toHaveAttribute('rel', 'noopener noreferrer'); await expect(link).toHaveAttribute('referrerpolicy', 'no-referrer');
+  await link.focus(); await expect(link).toBeFocused(); const opened = context.waitForEvent('page'); await page.keyboard.press('Enter'); const popup = await opened;
+  await expect(popup.getByRole('heading', { name: 'Related lesson fixture' })).toBeVisible();
+  expect(destinations).toEqual([{ url: 'https://foundry.example/low-level-design/lessons/state-lifecycle-errors', referrer: undefined }]);
+  await popup.close(); await expect(page).toHaveURL(/\/progress$/);
+  await page.setViewportSize({ width: 390, height: 844 }); await link.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('configured-foundry-lesson-mobile.png') });
 });
