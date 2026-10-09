@@ -5,7 +5,9 @@ export class HttpError extends Error {
 }
 
 export function privateJson(value: unknown, status = 200, headers?: HeadersInit) {
-  return Response.json(value, { status, headers: { 'Cache-Control': 'private, no-store', ...headers } });
+  const result = new Headers(headers);
+  result.set('Cache-Control', 'private, no-store');
+  return Response.json(value, { status, headers: result });
 }
 
 export function sameOrigin(request: Request) {

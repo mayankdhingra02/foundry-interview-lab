@@ -10,7 +10,7 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build --webpack",
     "start": "next start --hostname 127.0.0.1",
-    "worker": "tsx scripts/worker.ts",
+    "worker": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/worker.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",

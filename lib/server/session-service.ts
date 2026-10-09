@@ -4,7 +4,8 @@ import { buildEvidence, freezeEvidence, validateInterviewProposal, validateRepor
 import type { InferenceRecord, JobClaim, JobKind, JobResult, JobView, Mutation, PracticeDatabase, PracticeJob, Scenario, Session, SessionConfiguration, SessionView } from '../interview-practice/types';
 import type { PracticeStore } from './store';
 
-export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>> };
+export type SessionAdmissionContext = { ownerId: string; sessionId: string; requestId: string; now: string; database: PracticeDatabase };
+export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void> };
 export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; accommodations?: string[] };
 export type SessionMutationResult = { session: SessionView; job?: JobView; hint?: string };
 export function publicJob(job: PracticeJob): JobView {
@@ -19,12 +20,17 @@ export function sessionView(session: Session): SessionView {
 }
 export class SessionService {
   private readonly now: () => Date;
-  private readonly limits: Required<Omit<ServiceOptions, 'now' | 'reservations'>>;
+  private readonly limits: Required<Omit<ServiceOptions, 'now' | 'reservations' | 'admissionPolicy'>>;
+  private readonly admissionPolicy: ServiceOptions['admissionPolicy'];
   private readonly reservations: Record<JobKind, number>;
   constructor(readonly store: PracticeStore, private readonly resolveScenario: (id: string, version?: string) => Scenario | null, options: ServiceOptions = {}) {
     this.now = options.now ?? (() => new Date());
-    this.limits = { maxDailySessions: 10, maxActiveSessions: 3, maxDailyUsd: 5, maxSessionUsd: 1, maxRuns: 30, maxAiCalls: 25, leaseMs: 60_000, ...options };
+    this.admissionPolicy = options.admissionPolicy;
+    const { now: _now, reservations: _reservations, admissionPolicy: _policy, ...limits } = options;
+    void _now; void _reservations; void _policy;
+    this.limits = { maxDailySessions: 10, maxActiveSessions: 3, maxDailyUsd: 5, maxMonthlyUsd: 50, maxGlobalDailyUsd: 50, maxSessionUsd: 1, maxRuns: 30, maxAiCalls: 25, leaseMs: 60_000, ...limits };
     this.reservations = { run: 0, interviewer: 0.04, assistant: 0.08, coach: 0.15, ...options.reservations };
+    if (Object.values(this.limits).some(value => !Number.isFinite(value) || value <= 0) || Object.values(this.reservations).some(value => !Number.isFinite(value) || value < 0)) throw new DomainError('invalid', 'Practice limits must be finite positive numbers and reservations nonnegative.');
   }
   private at() { return this.now().toISOString(); }
   private scenario(session: Session) {
@@ -32,17 +38,17 @@ export class SessionService {
     if (!scenario || digest(scenario) !== session.scenarioDigest) throw new DomainError('unavailable', 'This saved scenario version changed. Restore its original package before continuing.');
     return scenario;
   }
-  private async mutate<T>(ownerId: string, requestId: string, operation: string, payload: unknown, sessionId: string | undefined, apply: (db: PracticeDatabase, now: string) => T): Promise<T> {
+  private async mutate<T>(ownerId: string, requestId: string, operation: string, payload: unknown, sessionId: string | undefined, apply: (db: PracticeDatabase, now: string) => T | Promise<T>): Promise<T> {
     if (!ownerId || ownerId.length > 200) throw new DomainError('invalid', 'A verified owner is required.');
     assertRequestId(requestId);
     const fingerprint = digest({ operation, payload, sessionId: sessionId ?? null });
-    return this.store.transaction(db => {
+    return this.store.transaction(async db => {
       const key = requestKey(ownerId, requestId), existing = db.requests[key];
       if (existing) {
         if (existing.fingerprint !== fingerprint) throw new DomainError('conflict', 'This request key was already used for different input.');
         return existing.result as T;
       }
-      const now = this.at(), result = apply(db, now);
+      const now = this.at(), result = await apply(db, now);
       db.requests[key] = { ownerId, requestId, fingerprint, result: structuredClone(result), createdAt: now, ...(sessionId ? { sessionId } : {}) };
       return result;
     });
@@ -50,19 +56,28 @@ export class SessionService {
   private reserve(db: PracticeDatabase, session: Session, job: PracticeJob, amount: number, now: string) {
     const commitment = session.usage.reservedUsd + session.usage.spentUsd + session.usage.uncertainUsd;
     const daily = db.ledger.filter(l => l.ownerId === session.ownerId && l.createdAt.slice(0, 10) === now.slice(0, 10)).reduce((sum, l) => sum + l.amountUsd, 0);
-    if (commitment + amount > this.limits.maxSessionUsd + 1e-9 || daily + amount > this.limits.maxDailyUsd + 1e-9) throw new DomainError('quota', 'The AI budget cannot cover this request. Your work is still saved.');
+    const monthly = db.ledger.filter(l => l.ownerId === session.ownerId && l.createdAt.slice(0, 7) === now.slice(0, 7)).reduce((sum, l) => sum + l.amountUsd, 0);
+    const globalDaily = db.ledger.filter(l => l.createdAt.slice(0, 10) === now.slice(0, 10)).reduce((sum, l) => sum + l.amountUsd, 0);
+    if (amount > 0 && (commitment + amount > this.limits.maxSessionUsd + 1e-9 || daily + amount > this.limits.maxDailyUsd + 1e-9 || monthly + amount > this.limits.maxMonthlyUsd + 1e-9 || globalDaily + amount > this.limits.maxGlobalDailyUsd + 1e-9)) throw new DomainError('quota', 'The AI budget cannot cover this request. Your work is still saved.');
     session.usage.reservedUsd += amount;
     job.reservationSequence = (job.reservationSequence ?? 0) + 1;
     db.ledger.push({ id: randomUUID(), ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:reserve`, kind: 'reservation', amountUsd: amount, createdAt: now });
   }
   private enqueue(db: PracticeDatabase, session: Session, kind: JobKind, requestId: string, input: Record<string, unknown>, now: string): PracticeJob {
     if (kind === 'run' && session.usage.runs >= this.limits.maxRuns) throw new DomainError('quota', 'This attempt has reached its test-run limit.');
-    if (kind !== 'run' && session.usage.aiCalls >= this.limits.maxAiCalls) throw new DomainError('quota', 'This attempt has reached its AI request limit.');
+    const aiLimitReached = kind !== 'run' && session.usage.aiCalls >= this.limits.maxAiCalls;
+    if (kind === 'assistant' && aiLimitReached) throw new DomainError('quota', 'This attempt has reached its AI request limit.');
     if (session.jobs.some(j => j.kind === kind && ['queued', 'running'].includes(j.state))) throw new DomainError('conflict', `A ${kind} operation is already pending.`);
     const job: PracticeJob = { id: randomUUID(), sessionId: session.id, ownerId: session.ownerId, kind, state: 'queued', requestId, fingerprint: digest(input), snapshotId: selectedSnapshot(session).id, input: structuredClone(input), createdAt: now, updatedAt: now, attempt: 0, reservationSequence: 0, fencingToken: 0, claimToken: null, workerId: null, leaseExpiresAt: null, cancellationRequested: false, reservedUsd: this.reservations[kind] };
-    this.reserve(db, session, job, job.reservedUsd, now);
+    if ((kind === 'interviewer' || kind === 'coach') && (aiLimitReached || job.reservedUsd === 0)) { job.reservedUsd = 0; job.input.forceAuthored = true; }
+    try { this.reserve(db, session, job, job.reservedUsd, now); }
+    catch (error) {
+      if (!(error instanceof DomainError) || error.code !== 'quota' || (kind !== 'interviewer' && kind !== 'coach')) throw error;
+      job.reservedUsd = 0; job.input.forceAuthored = true;
+      this.reserve(db, session, job, 0, now);
+    }
     session.jobs.push(job);
-    if (kind === 'run') session.usage.runs += 1; else session.usage.aiCalls += 1;
+    if (kind === 'run') session.usage.runs += 1; else if (!job.input.forceAuthored) session.usage.aiCalls += 1;
     return job;
   }
   private settle(db: PracticeDatabase, session: Session, job: PracticeJob, now: string, actualUsd?: number, definitelyNotCalled = false) {
@@ -79,7 +94,7 @@ export class SessionService {
   }
   async createSession(ownerId: string, input: CreateSessionInput): Promise<SessionMutationResult> {
     const { requestId, ...creation } = input;
-    return this.mutate(ownerId, requestId, 'create', creation, undefined, (db, now) => {
+    return this.mutate(ownerId, requestId, 'create', creation, undefined, async (db, now) => {
       const scenario = this.resolveScenario(input.scenarioId, input.version);
       if (!scenario?.stages.length || !scenario.rubric.length) throw new DomainError('not_found', 'Scenario not found.');
       const all = Object.values(db.sessions).filter(s => s.ownerId === ownerId);
@@ -90,6 +105,7 @@ export class SessionService {
       const configuration: SessionConfiguration = { role: (config.role ?? input.role ?? 'Backend engineer').slice(0, 120), level: (config.level ?? input.level ?? scenario.level).slice(0, 100), skills: config.skills ?? input.skills ?? [...scenario.tags], targetMinutes: config.targetMinutes ?? input.targetMinutes ?? input.durationMinutes ?? scenario.durationMinutes, aiHelp: config.aiHelp ?? input.aiHelp ?? input.aiAssistance ?? true, accommodations: config.accommodations ?? input.accommodations ?? [] };
       if (!Number.isInteger(configuration.targetMinutes) || configuration.targetMinutes < 5 || configuration.targetMinutes > 180 || !Array.isArray(configuration.skills) || configuration.skills.length > 20 || configuration.skills.some(s => typeof s !== 'string' || s.length > 100) || !Array.isArray(configuration.accommodations) || configuration.accommodations.length > 10 || configuration.accommodations.some(s => typeof s !== 'string' || s.length > 200) || typeof configuration.aiHelp !== 'boolean') throw new DomainError('invalid', 'Invalid session configuration.');
       const session: Session = { id: randomUUID(), ownerId, scenarioId: scenario.id, scenarioVersion: scenario.version, scenarioDigest: digest(scenario), scenario: toPublicScenario(scenario), mode: input.mode ?? 'practice', configuration, lifecycle: 'active', stageId: scenario.stages[0].id, revision: 0, files: validateFiles(scenario.files, scenario), snapshots: [], codeFrozenSnapshotId: null, frozenEvidence: null, events: [], turns: [], runs: [], jobs: [], assistantMessages: [], editProposals: [], reports: [], usage: { reservedUsd: 0, spentUsd: 0, uncertainUsd: 0, runs: 0, aiCalls: 0 }, createdAt: now, updatedAt: now, hintsOpened: 0, completedDrillIds: [], promptExposure: all.some(s => s.scenarioId === scenario.id) ? 'repeated' : 'fresh' };
+      await this.admissionPolicy?.({ ownerId, sessionId: session.id, requestId, now, database: db });
       createSnapshot(session, session.files, now); appendEvent(session, 'session.started', { scenarioId: scenario.id, scenarioVersion: scenario.version, mode: session.mode }, input.requestId, now, 'learner');
       db.sessions[session.id] = session;
       db.ledger.push({ id: randomUUID(), ownerId, sessionId: session.id, operationId: `${session.id}:admission`, kind: 'admission', amountUsd: 0, createdAt: now });
@@ -359,7 +375,8 @@ export class SessionService {
     return this.mutate(ownerId, input.requestId, 'delete-account', {}, undefined, (db, now) => {
       for (const session of Object.values(db.sessions).filter(s => s.ownerId === ownerId)) this.removeSession(db, ownerId, session.id, now);
       for (const [key, request] of Object.entries(db.requests)) if (request.ownerId === ownerId) delete db.requests[key];
-      db.ledger = db.ledger.filter(l => l.ownerId !== ownerId);
+      // This operation erases Lab content, while preserving the shared account.
+      // Content-free quota postings must survive so deletion cannot reset provider-spend caps.
       return { deleted: true as const };
     });
   }
