@@ -11,6 +11,30 @@ type RawRow = Record<string, unknown> & { runtime_payload: Record<string, unknow
 export type PostgresStoreOptions = { advisoryLockKey?: number; statementTimeoutMs?: number; lockTimeoutMs?: number; maxStateBytes?: number; maxEntityRows?: number };
 const tables = ['ai_practice_sessions', 'ai_practice_snapshots', 'ai_practice_events', 'ai_practice_jobs', 'ai_practice_reports', 'ai_practice_requests', 'ai_practice_usage_ledger', 'ai_practice_deletions', 'ai_practice_turns', 'ai_practice_runs', 'ai_practice_assistant_messages', 'ai_practice_edit_proposals', 'ai_practice_evidence_manifests'] as const;
 const reviewTables = ['ai_practice_review_cases','ai_practice_correction_drafts','ai_practice_correction_decisions','ai_practice_correction_publications','ai_practice_review_audits'] as const;
+type PracticeTable = typeof tables[number] | typeof reviewTables[number];
+// Preserve every relational identity/state check and ordering input used by
+// load. Entity payloads already hold content; other JSON columns duplicate it.
+const readColumns: Record<PracticeTable, readonly string[]> = {
+  ai_practice_sessions: ['id','user_id','scenario_id','scenario_version','revision','lifecycle','runtime_payload'],
+  ai_practice_snapshots: ['id','session_id','user_id','sequence','content_sha256','created_at','runtime_payload'],
+  ai_practice_events: ['id','session_id','user_id','sequence','event_type','source','request_id','schema_version','payload','runtime_payload'],
+  ai_practice_jobs: ['id','session_id','user_id','state','fencing_token','claim_token','runtime_sequence','created_at','runtime_payload'],
+  ai_practice_reports: ['id','session_id','user_id','runtime_sequence','created_at','runtime_payload'],
+  ai_practice_requests: ['user_id','request_id','fingerprint','runtime_payload'],
+  ai_practice_usage_ledger: ['id','user_id','operation_id','runtime_payload'],
+  ai_practice_deletions: ['id','opaque_owner_id','runtime_payload'],
+  ai_practice_turns: ['id','session_id','user_id','sequence','runtime_payload'],
+  ai_practice_runs: ['id','session_id','user_id','sequence','runtime_payload'],
+  ai_practice_assistant_messages: ['id','session_id','user_id','sequence','runtime_payload'],
+  ai_practice_edit_proposals: ['id','session_id','user_id','sequence','runtime_payload'],
+  ai_practice_evidence_manifests: ['session_id','user_id','digest','runtime_payload'],
+  ai_practice_review_cases: ['id','user_id','session_id','report_id','status','revision','inspection_consent','support_actions_consent','runtime_payload'],
+  ai_practice_correction_drafts: ['id','user_id','session_id','case_id','evidence_digest','source_report_id','report_id','generation_id','runtime_payload'],
+  ai_practice_correction_decisions: ['id','user_id','session_id','case_id','runtime_payload'],
+  ai_practice_correction_publications: ['id','user_id','session_id','case_id','runtime_payload'],
+  ai_practice_review_audits: ['id','user_id','session_id','case_id','runtime_payload'],
+};
+export type LoadTransportMetrics = { entityRows: number; fullRowJsonBytes: number; projectedRowJsonBytes: number };
 const json = (value: unknown) => JSON.stringify(value);
 const persistedCanonical = (value: unknown) => canonical(JSON.parse(json(value)));
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -125,8 +149,9 @@ export class PostgresPracticeStore implements PracticeStore {
     const counts = await this.preflight(client, present);
     for (const table of present) records.set(table, []);
     // A tagged row stream avoids one network roundtrip per table and avoids a
-    // single giant JSON aggregate. to_jsonb keeps nested JSON payloads typed.
-    const result = await client.query<{ table_name: string; entity: RawRow }>(present.map(table => `select '${table}'::text as table_name, to_jsonb(entity) as entity from public.${table} as entity`).join(' union all '));
+    // single giant JSON aggregate. Fixed projections avoid transferring private
+    // files/results/input twice while retaining every check and ordering input.
+    const result = await client.query<{ table_name: string; entity: RawRow }>(present.map(table => `select '${table}'::text as table_name, to_jsonb(entity) as entity from (select ${readColumns[table].join(',')} from public.${table}) as entity`).join(' union all '));
     for (const { table_name: table, entity: row } of result.rows) {
       const target = records.get(table);
       if (!target || !row || typeof row !== 'object' || Array.isArray(row) || !row.runtime_payload || typeof row.runtime_payload !== 'object' || Array.isArray(row.runtime_payload) || !Object.keys(row.runtime_payload).length) throw unavailable();
@@ -273,6 +298,29 @@ export class PostgresPracticeStore implements PracticeStore {
     try {
       client = await this.pool.connect(); await client.query('begin isolation level repeatable read read only'); await this.setup(client);
       const result = await this.load(client); await client.query('commit'); return structuredClone(result);
+    } catch (error) {
+      await client?.query('rollback').catch(() => undefined);
+      if (error instanceof DomainError || error instanceof HttpError) throw error; throw unavailable();
+    } finally { client?.release(); }
+  }
+  /** Count-only qualification diagnostic; JSON row text excludes protocol framing. */
+  async measureLoadTransport(): Promise<LoadTransportMetrics> {
+    let client: PoolClient | undefined;
+    try {
+      client = await this.pool.connect(); await client.query('begin isolation level repeatable read read only'); await this.setup(client);
+      const reviewReady = Boolean((await client.query("select to_regclass('public.ai_practice_review_cases') as table_name")).rows[0].table_name);
+      const present = [...tables, ...(reviewReady ? reviewTables : [])], counts = await this.preflight(client, present);
+      // SQL produces only table names and counts. No private JSON is transferred
+      // or logged; full and projected sizes describe the exact same SQL snapshot.
+      const result = await client.query<{ table_name: string; count: string; full_bytes: string; projected_bytes: string }>(present.map(table => `select '${table}'::text as table_name,count(*)::text as count,coalesce(sum(octet_length(to_jsonb(source)::text)),0)::text as full_bytes,coalesce(sum(octet_length(to_jsonb(projected)::text)),0)::text as projected_bytes from public.${table} as source cross join lateral (select ${readColumns[table].map(column => `source.${column}`).join(',')}) as projected`).join(' union all '));
+      const seen = new Set<string>(), metrics: LoadTransportMetrics = { entityRows: 0, fullRowJsonBytes: 0, projectedRowJsonBytes: 0 };
+      for (const row of result.rows) {
+        const count = Number(row.count), full = Number(row.full_bytes), projected = Number(row.projected_bytes);
+        if (!counts.has(row.table_name) || seen.has(row.table_name) || count !== counts.get(row.table_name) || [count,full,projected].some(value => !Number.isSafeInteger(value) || value < 0) || projected > full) throw unavailable();
+        seen.add(row.table_name); metrics.entityRows += count; metrics.fullRowJsonBytes += full; metrics.projectedRowJsonBytes += projected;
+      }
+      if (seen.size !== present.length || Object.values(metrics).some(value => !Number.isSafeInteger(value))) throw unavailable();
+      await client.query('commit'); return metrics;
     } catch (error) {
       await client?.query('rollback').catch(() => undefined);
       if (error instanceof DomainError || error instanceof HttpError) throw error; throw unavailable();

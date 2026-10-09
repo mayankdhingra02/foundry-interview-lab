@@ -14,7 +14,8 @@ const percentile = (values: number[], q: number) => [...values].sort((a, b) => a
 const result = await withDisposablePostgres(async database => {
   const scenario = getScenario('monetary-validation')!, ownerIds = Array.from({ length: 10 }, () => randomUUID());
   await database.admin.query('insert into auth.users(id) select unnest($1::uuid[])', [ownerIds]);
-  const service = new SessionService(new PostgresPracticeStore(database.service), getScenario, { maxDailySessions: 20 });
+  const store = new PostgresPracticeStore(database.service);
+  const service = new SessionService(store, getScenario, { maxDailySessions: 20 });
   const sessions = await Promise.all(ownerIds.map(ownerId => service.createSession(ownerId, { scenarioId: scenario.id, requestId: randomUUID() })));
   const saveMs: number[] = [], durable: boolean[] = [];
   await Promise.all(sessions.map(async (created, index) => {
@@ -30,6 +31,9 @@ const result = await withDisposablePostgres(async database => {
       durable.push(digest((await restarted.getSession(ownerIds[index], session.id)).files) === digest(files) && replay.session.revision === session.revision);
     }
   }));
+  // Same completed 50-save corpus, outside timed samples. These are count-only
+  // JSON row-text sizes; no content is emitted and no latency claim is inferred.
+  const loadTransport = await store.measureLoadTransport();
   const firstOwner = ownerIds[0]; let first = (await service.listSessions(firstOwner))[0];
   const writes = await Promise.allSettled([service.saveWorkspace(firstOwner, first.id, { requestId: randomUUID(), expectedRevision: first.revision, files: first.files }), service.saveWorkspace(firstOwner, first.id, { requestId: randomUUID(), expectedRevision: first.revision, files: first.files })]);
   const staleWriteRejected = writes.filter(row => row.status === 'fulfilled').length === 1;
@@ -54,7 +58,7 @@ const result = await withDisposablePostgres(async database => {
   const counters = await operationalCounters(database.service);
   const checks = { acknowledgedSavesPreserved: durable.every(Boolean), duplicateReplayPreserved: durable.every(Boolean), staleWriteRejected, leaseTakeoverFencesOldWorker: staleCompletionRejected && currentClaim!.fencingToken > oldClaim!.fencingToken, freshWorkerReady: ready.status === 'ready', sharedCleanupHoldBlocksReadiness: blocked.checks.execution === 'blocked', operationalRowsPrivate, backupRestoresSessions: backupRestore.matchingSessions, backupRestoresSnapshotDigests: backupRestore.matchingSnapshots };
   const saveP95Ms = percentile(saveMs, 0.95);
-  return { generatedAt: new Date().toISOString(), scope: 'Disposable local PostgreSQL migration, durable save, replay, lease recovery, operations and backup/restore smoke. No provider inference or hosted load.', migrations: database.migrationVersions, load: { simultaneousSyntheticSessions: 10, acknowledgedSaves: saveMs.length, saveP50Ms: percentile(saveMs, 0.5), saveP95Ms, saveMaxMs: Math.max(...saveMs), targetSaveP95Ms: 1000 }, recovery: { ...checks, backupRestoreMs: backupRestore.durationMs }, safeCounters: counters, status: Object.values(checks).every(Boolean) && saveP95Ms < 1000 ? 'passed' : 'failed', limitations: ['Small localhost smoke; does not establish hosted beta capacity or monthly availability.', 'No live model, voice, browser-network interruption, or public isolation claim.', 'Local backup/restore is not a production RPO/RTO or backup-retention qualification.'] };
+  return { generatedAt: new Date().toISOString(), scope: 'Disposable local PostgreSQL migration, durable save, replay, lease recovery, operations and backup/restore smoke. No provider inference or hosted load.', migrations: database.migrationVersions, load: { simultaneousSyntheticSessions: 10, acknowledgedSaves: saveMs.length, saveP50Ms: percentile(saveMs, 0.5), saveP95Ms, saveMaxMs: Math.max(...saveMs), targetSaveP95Ms: 1000, loadTransport }, recovery: { ...checks, backupRestoreMs: backupRestore.durationMs }, safeCounters: counters, status: Object.values(checks).every(Boolean) && saveP95Ms < 1000 ? 'passed' : 'failed', limitations: ['Small localhost smoke; does not establish hosted beta capacity or monthly availability.', 'Load transport compares JSON row text for the same corpus; excludes TCP/PostgreSQL framing and is not a latency result.', 'No live model, voice, browser-network interruption, or public isolation claim.', 'Local backup/restore is not a production RPO/RTO or backup-retention qualification.'] };
 });
 const outputIndex = process.argv.indexOf('--output');
 if (outputIndex >= 0) { const path = process.argv[outputIndex + 1]; if (!path || path.startsWith('--')) throw new Error('--output needs a path.'); await mkdir(dirname(resolve(path)), { recursive: true }); await writeFile(resolve(path), JSON.stringify(result, null, 2) + '\n'); }
