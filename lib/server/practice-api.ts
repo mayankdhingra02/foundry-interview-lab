@@ -10,6 +10,8 @@ import { exportPracticeSession } from './export';
 import { streamEvents } from './event-stream';
 import { handleVoiceRequest } from '../voice/api';
 import { executionAdmissionOpen } from './operations';
+import { ownerReviews, ownerReviewConsent } from './review-api';
+import { getReviewService } from './review-service';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
@@ -27,6 +29,7 @@ export async function practiceApi(request: Request, path: string[]) {
     if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return privateJson({ capabilities: capabilities() });
     if (path.length === 1 && path[0] === 'scenarios' && method === 'GET') return privateJson({ scenarios: listScenarios().map(toPublicScenario), capabilities: capabilities() });
     const actor = await requireActor(request), service = await getService();
+    if (path[0] === 'reviews' && path[1] && path[2] === 'consent' && path.length === 3) return ownerReviewConsent(request, path[1]);
     if (path.length === 1 && path[0] === 'progress' && method === 'GET') {
       const sessions = await service.listSessions(actor.id);
       const skills = new Map<string, { id: string; name: string; observations: number; lastObservedAt: string; level: string; levels: Record<string, number> }>();
@@ -59,6 +62,7 @@ export async function practiceApi(request: Request, path: string[]) {
     if (path.length === 2 && method === 'DELETE') return privateJson(await service.deleteSession(actor.id, id, parsed(key, await readJson(request, 2000))));
     if (operation === 'voice' && path.length === 4 && ['transcribe', 'speak'].includes(path[3])) return handleVoiceRequest(request, actor.id, id, path[3] as 'transcribe' | 'speak');
     if (path.length !== 3) throw new HttpError(404, 'not_found', 'Endpoint not found.');
+    if (operation === 'reviews') return ownerReviews(request, id);
     if (operation === 'events' && method === 'GET') {
       const after = Number(new URL(request.url).searchParams.get('after') || request.headers.get('last-event-id') || 0);
       if (request.headers.get('accept')?.includes('text/event-stream')) return streamEvents(request, service, actor.id, id, after);
@@ -66,7 +70,8 @@ export async function practiceApi(request: Request, path: string[]) {
     }
     if (operation === 'export' && method === 'GET') {
       const session = exportPracticeSession(await service.exportSession(actor.id, id));
-      return privateJson({ session }, 200, { 'Content-Disposition': `attachment; filename="practice-${id}.json"` });
+      const reviews = await (await getReviewService()).exportOwner(actor.id, id);
+      return privateJson({ session, reviews }, 200, { 'Content-Disposition': `attachment; filename="practice-${id}.json"` });
     }
     if (!['POST', 'PUT'].includes(method)) throw new HttpError(404, 'not_found', 'Endpoint not found.');
     const body = await readJson(request, operation === 'workspace' ? 300_000 : 20_000);

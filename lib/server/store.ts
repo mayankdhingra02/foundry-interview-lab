@@ -3,9 +3,21 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DomainError } from '../interview-practice/domain';
+import { parseSessionEvents } from '../interview-practice/events';
 import type { PracticeDatabase } from '../interview-practice/types';
 
 export const emptyDatabase = (): PracticeDatabase => ({ schemaVersion: 1, sessions: {}, requests: {}, ledger: [], deletions: [] });
+/** Persistence validation rejects the whole operation; it never drops a bad replay record. */
+export function validateStoredEvents(database: PracticeDatabase) {
+  try {
+    for (const [id, session] of Object.entries(database.sessions)) {
+      if (session.id !== id) throw new Error('invalid_session_identity');
+      session.events = parseSessionEvents(session.events, id);
+    }
+  } catch {
+    throw new DomainError('unavailable', 'Practice event storage could not be validated. Existing data was not overwritten.');
+  }
+}
 export interface PracticeStore {
   read(): Promise<PracticeDatabase>;
   transaction<T>(operation: (database: PracticeDatabase) => T | Promise<T>): Promise<T>;
@@ -21,6 +33,8 @@ export class FilePracticeStore implements PracticeStore {
     try {
       const value = JSON.parse(await readFile(this.file, 'utf8')) as PracticeDatabase;
       if (value.schemaVersion !== 1 || !value.sessions || !value.requests || !Array.isArray(value.ledger) || !Array.isArray(value.deletions)) throw new Error('invalid_store');
+      if (value.reviews && (!value.reviews.cases || !value.reviews.drafts || !value.reviews.decisions || !value.reviews.publications || !Array.isArray(value.reviews.audits))) throw new Error('invalid_review_store');
+      validateStoredEvents(value);
       return value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyDatabase();
@@ -72,6 +86,7 @@ export class FilePracticeStore implements PracticeStore {
     const temp = join(this.directory, `.${randomUUID()}.tmp`);
     try {
       const database = await this.load(), result = await operation(database);
+      validateStoredEvents(database);
       const handle = await open(temp, 'wx', 0o600);
       try { await handle.writeFile(JSON.stringify(database)); await handle.sync(); } finally { await handle.close(); }
       await rename(temp, this.file);
@@ -84,14 +99,15 @@ export class FilePracticeStore implements PracticeStore {
 export class MemoryPracticeStore implements PracticeStore {
   private database = emptyDatabase();
   private tail: Promise<void> = Promise.resolve();
-  async read() { await this.tail; return structuredClone(this.database); }
+  async read() { await this.tail; const copy = structuredClone(this.database); validateStoredEvents(copy); return copy; }
   async transaction<T>(operation: (database: PracticeDatabase) => T | Promise<T>): Promise<T> {
     const previous = this.tail;
     let release!: () => void;
     this.tail = new Promise(resolve => { release = resolve; });
     await previous;
     try {
-      const copy = structuredClone(this.database), result = await operation(copy);
+      const copy = structuredClone(this.database); validateStoredEvents(copy);
+      const result = await operation(copy); validateStoredEvents(copy);
       this.database = copy; return structuredClone(result);
     } finally { release(); }
   }

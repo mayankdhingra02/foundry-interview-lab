@@ -1,20 +1,32 @@
 import { Pool, type PoolClient } from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { canonical, digest, DomainError, requestKey } from '../interview-practice/domain';
-import type { EvidenceManifest, PracticeDatabase, Session } from '../interview-practice/types';
-import { emptyDatabase, type PracticeStore } from './store';
+import type { EvidenceManifest, PracticeDatabase, ReviewDatabase, Session } from '../interview-practice/types';
+import { emptyDatabase, validateStoredEvents, type PracticeStore } from './store';
 
 type EntityRow = { key: string; columns: Record<string, unknown>; value: unknown };
 type TableSpec = { table: string; keys: string[]; rows: EntityRow[] };
 type RawRow = Record<string, unknown> & { runtime_payload: Record<string, unknown> };
 export type PostgresStoreOptions = { advisoryLockKey?: number; statementTimeoutMs?: number; lockTimeoutMs?: number; maxStateBytes?: number; maxEntityRows?: number };
 const tables = ['ai_practice_sessions', 'ai_practice_snapshots', 'ai_practice_events', 'ai_practice_jobs', 'ai_practice_reports', 'ai_practice_requests', 'ai_practice_usage_ledger', 'ai_practice_deletions', 'ai_practice_turns', 'ai_practice_runs', 'ai_practice_assistant_messages', 'ai_practice_edit_proposals', 'ai_practice_evidence_manifests'] as const;
+const reviewTables = ['ai_practice_review_cases','ai_practice_correction_drafts','ai_practice_correction_decisions','ai_practice_correction_publications','ai_practice_review_audits'] as const;
 const json = (value: unknown) => JSON.stringify(value);
 const persistedCanonical = (value: unknown) => canonical(JSON.parse(json(value)));
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const unavailable = () => new DomainError('unavailable', 'PostgreSQL practice storage is unavailable. Retry the same request key; private data was not logged.');
 function rows(table: string, values: EntityRow[], keys = ['id']): TableSpec { return { table, keys, rows: values }; }
 function entity(key: string, value: unknown, columns: Record<string, unknown>): EntityRow { return { key, value, columns: { ...columns, runtime_payload: json(value) } }; }
+function reviewSpecifications(database: PracticeDatabase): TableSpec[] {
+  const review = database.reviews ?? { cases: {}, drafts: {}, decisions: {}, publications: {}, audits: [] };
+  const ownerColumns = (record: { ownerId: string; sessionId: string; caseId?: string }) => ({ user_id: record.ownerId, session_id: record.sessionId, ...(record.caseId ? { case_id: record.caseId } : {}) });
+  return [
+    rows('ai_practice_review_cases', Object.values(review.cases).map(record => entity(record.id, record, { id: record.id, ...ownerColumns(record), report_id: record.reportId, category: record.category, status: record.status, revision: record.revision, inspection_consent: record.inspectionConsent, support_actions_consent: record.supportActionsConsent, consent_expires_at: record.consentExpiresAt, created_at: record.createdAt, updated_at: record.updatedAt }))),
+    rows('ai_practice_correction_drafts', Object.values(review.drafts).map(record => entity(record.id, record, { id: record.id, ...ownerColumns(record), source_report_id: record.sourceReportId, report_id: record.reportId, generation_id: record.generationId, evidence_digest: record.evidenceDigest, evidence_watermark: record.evidenceWatermark, created_by: record.createdBy, created_at: record.createdAt }))),
+    rows('ai_practice_correction_decisions', Object.values(review.decisions).map(record => entity(record.id, record, { id: record.id, ...ownerColumns(record), draft_id: record.draftId, reviewer_id: record.reviewerId, decision: record.decision, created_at: record.createdAt }))),
+    rows('ai_practice_correction_publications', Object.values(review.publications).map(record => entity(record.id, record, { id: record.id, ...ownerColumns(record), draft_id: record.draftId, report_id: record.reportId, generation_id: record.generationId, published_by: record.publishedBy, created_at: record.createdAt }))),
+    rows('ai_practice_review_audits', review.audits.map(record => entity(record.id, record, { id: record.id, user_id: record.ownerId ?? null, session_id: record.sessionId ?? null, case_id: record.caseId ?? null, actor_id: record.actorId, action: record.action, created_at: record.createdAt }))),
+  ];
+}
 function sessionMetadata(session: Session) {
   const { files: _files, snapshots: _snapshots, events: _events, jobs: _jobs, reports: _reports, turns: _turns, runs: _runs, assistantMessages: _messages, editProposals: _edits, frozenEvidence: _manifest, ...metadata } = session;
   void _files; void _snapshots; void _events; void _jobs; void _reports; void _turns; void _runs; void _messages; void _edits; void _manifest;
@@ -70,6 +82,7 @@ function specifications(database: PracticeDatabase): TableSpec[] {
       state: record.state, attempt: 0, created_at: record.createdAt, completed_at: record.completedAt ?? null,
       expires_at: new Date(new Date(record.createdAt).getTime() + 30 * 86_400_000).toISOString(),
     }))),
+    ...reviewSpecifications(database),
   ];
 }
 
@@ -91,7 +104,9 @@ export class PostgresPracticeStore implements PracticeStore {
   private async load(client: PoolClient): Promise<PracticeDatabase> {
     const db = emptyDatabase(), records = new Map<string, RawRow[]>();
     let totalBytes = 0;
-    for (const table of tables) {
+    // Additive rollout: baseline practice remains readable before the optional review migration.
+    const reviewReady = Boolean((await client.query("select to_regclass('public.ai_practice_review_cases') as table_name")).rows[0].table_name);
+    for (const table of [...tables, ...(reviewReady ? reviewTables : [])]) {
       const size = await client.query<{ bytes: string; count: string }>(`select coalesce(sum(octet_length(runtime_payload::text)),0)::text as bytes, count(*)::text as count from public.${table}`);
       totalBytes += Number(size.rows[0].bytes);
       if (totalBytes > this.options.maxStateBytes || Number(size.rows[0].count) > this.options.maxEntityRows) throw new DomainError('unavailable', 'The initial persistence adapter capacity was reached. Data was not truncated; qualify a scoped adapter before expanding capacity.');
@@ -116,6 +131,7 @@ export class PostgresPracticeStore implements PracticeStore {
         const session = db.sessions[String(row.session_id)], payload = row.runtime_payload;
         if (!session || session.ownerId !== row.user_id || payload.id !== row.id) throw unavailable();
         if (field === 'jobs' && (payload.ownerId !== row.user_id || payload.sessionId !== row.session_id || payload.state !== row.state || payload.fencingToken !== Number(row.fencing_token) || payload.claimToken !== row.claim_token)) throw unavailable();
+        if (field === 'events' && (payload.sessionId !== row.session_id || payload.sequence !== Number(row.sequence) || payload.type !== row.event_type || payload.source !== row.source || payload.requestId !== row.request_id || payload.schemaVersion !== Number(row.schema_version) || persistedCanonical(payload.payload) !== persistedCanonical(row.payload))) throw unavailable();
         if (field === 'snapshots' && (payload.sha256 !== row.content_sha256 || digest(payload.files) !== row.content_sha256)) throw unavailable();
         (session[field] as unknown[]).push(payload);
       }
@@ -144,6 +160,24 @@ export class PostgresPracticeStore implements PracticeStore {
       const record = row.runtime_payload as unknown as PracticeDatabase['deletions'][number];
       if (record.id !== row.id || record.ownerId !== row.opaque_owner_id) throw unavailable(); db.deletions.push(record);
     }
+    if (reviewReady) {
+      const reviews: ReviewDatabase = { cases: {}, drafts: {}, decisions: {}, publications: {}, audits: [] }; db.reviews = reviews;
+      const fields = ['cases','drafts','decisions','publications','audits'] as const;
+      reviewTables.forEach((table, index) => {
+        const field = fields[index];
+        for (const row of records.get(table)!) {
+          const value = row.runtime_payload;
+          if (value.id !== row.id || (value.ownerId ?? null) !== row.user_id || (value.sessionId ?? null) !== row.session_id || (value.caseId ?? null) !== (row.case_id ?? null)) throw unavailable();
+          if (row.session_id && (!db.sessions[String(row.session_id)] || db.sessions[String(row.session_id)].ownerId !== row.user_id)) throw unavailable();
+          if (field === 'cases' && (value.status !== row.status || value.revision !== Number(row.revision) || value.reportId !== row.report_id || value.inspectionConsent !== row.inspection_consent || value.supportActionsConsent !== row.support_actions_consent)) throw unavailable();
+          if (field === 'drafts' && (value.evidenceDigest !== row.evidence_digest || value.sourceReportId !== row.source_report_id || value.reportId !== row.report_id || value.generationId !== row.generation_id)) throw unavailable();
+          if (field === 'audits') reviews.audits.push(value as unknown as ReviewDatabase['audits'][number]);
+          else (reviews[field] as Record<string, unknown>)[String(row.id)] = value;
+        }
+      });
+      reviews.audits.sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    }
+    validateStoredEvents(db);
     return db;
   }
   private async upsert(client: PoolClient, spec: TableSpec, row: EntityRow) {
@@ -169,9 +203,25 @@ export class PostgresPracticeStore implements PracticeStore {
       }
       if (old.frozenEvidence && canonical(old.frozenEvidence) !== canonical(session.frozenEvidence)) throw new DomainError('conflict', 'Final evidence is immutable.');
     }
+    for (const field of ['drafts','decisions','publications'] as const) for (const previous of Object.values(before.reviews?.[field] ?? {})) {
+      if (!after.sessions[previous.sessionId]) continue;
+      const current = after.reviews?.[field][previous.id];
+      if (!current || persistedCanonical(current) !== persistedCanonical(previous)) throw new DomainError('conflict', 'Acknowledged staff review records are immutable.');
+    }
+    for (const previous of before.reviews?.audits ?? []) {
+      if (previous.sessionId && !after.sessions[previous.sessionId]) continue;
+      const current = after.reviews?.audits.find(item => item.id === previous.id);
+      if (!current || persistedCanonical(current) !== persistedCanonical(previous)) throw new DomainError('conflict', 'Support audit records are immutable.');
+    }
+    for (const previous of Object.values(before.reviews?.cases ?? {})) {
+      if (!after.sessions[previous.sessionId]) continue;
+      const current = after.reviews?.cases[previous.id];
+      if (!current || current.ownerId !== previous.ownerId || current.sessionId !== previous.sessionId || current.reportId !== previous.reportId) throw new DomainError('conflict', 'Support ownership and source identity cannot change.');
+    }
   }
   private async persist(client: PoolClient, before: PracticeDatabase, after: PracticeDatabase) {
     if (after.schemaVersion !== 1 || Buffer.byteLength(json(after)) > this.options.maxStateBytes) throw new DomainError('unavailable', 'Initial persistence adapter capacity exceeded; changes were rolled back.');
+    validateStoredEvents(after);
     this.validateImmutable(before, after);
     const previous = specifications(before), next = specifications(after);
     // Durable deletion metadata survives auth/session cascades and is committed atomically with removal.
