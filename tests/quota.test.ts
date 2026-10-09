@@ -7,6 +7,7 @@ import { MemoryPracticeStore } from '../lib/server/store';
 import { reserveVoice, settleVoice } from '../lib/voice/ledger';
 import type { VoiceConfig } from '../lib/voice/config';
 import { scenario } from './review-fixtures';
+import { voiceDebriefFixture } from './voice-fixtures';
 
 const prior = '2026-10-31T23:59:50.000Z', next = '2026-11-01T00:00:01.000Z';
 const posting = (operationId: string, kind: LedgerEntry['kind'], amountUsd: number, createdAt: string, extra: Partial<LedgerEntry> = {}): LedgerEntry => ({ id: randomUUID(), ownerId: 'owner-a', sessionId: 'session-a', operationId, kind, amountUsd, createdAt, ...extra });
@@ -64,7 +65,7 @@ describe('reservation-owned UTC budget windows', () => {
 function setup(at: string, options: ServiceOptions = {}) {
   const clock = { value: new Date(at) }, store = new MemoryPracticeStore();
   const service = new SessionService(store, () => structuredClone(scenario), { now: () => clock.value, maxSessionUsd: 10, maxDailyUsd: 10, maxMonthlyUsd: 100, maxGlobalDailyUsd: 100, ...options });
-  const create = async (ownerId = 'owner-a') => (await service.createSession(ownerId,{ scenarioId: scenario.id, requestId: randomUUID() })).session;
+  const create = async (ownerId = 'owner-a') => (await service.createSession(ownerId,{ scenarioId: scenario.id, voice: true, requestId: randomUUID() })).session;
   const request = async (id: string, ownerId = 'owner-a') => { const session = await service.getSession(ownerId,id); return service.requestAssistant(ownerId,id,{ requestId: randomUUID(), expectedRevision: session.revision, mode: 'ask', message: 'Explain this code.' }); };
   return { clock, store, service, create, request };
 }
@@ -119,7 +120,9 @@ describe('atomic AI and speech quota admission across UTC boundaries', () => {
   const voiceConfig: VoiceConfig = { apiKey: 'synthetic-not-a-key', sttUsdPerMinute: .0043, ttsUsdPerThousandChars: .03, sessionMinutes: 20, userDailyMinutes: 60, globalDailyMinutes: 600, sessionUsd: 10, userDailyUsd: .1, userMonthlyUsd: 100, globalDailyUsd: 100 };
   const voiceInput = (sessionId: string, ownerId = 'owner-a') => ({ sessionId, ownerId, requestId: randomUUID(), operation: 'transcribe' as const, fingerprint: 'a'.repeat(64), seconds: 1, characters: 0, usd: .08 });
   it('uses the same USD helper for voice so late AI refunds cannot fund extra speech', async () => {
-    const context = setup(prior), { session } = await boundarySettlement(context), first = await reserveVoice(context.store,voiceConfig,voiceInput(session.id),context.clock.value);
+    const context = setup(prior), { session } = await boundarySettlement(context);
+    await voiceDebriefFixture(context.store,session.id);
+    const first = await reserveVoice(context.store,voiceConfig,voiceInput(session.id),context.clock.value);
     await settleVoice(context.store,first,false,context.clock.value);
     await expect(reserveVoice(context.store,voiceConfig,voiceInput(session.id),context.clock.value)).rejects.toMatchObject({ code: 'quota' });
     expect(totals((await context.store.read()).ledger).userDailyUsd).toBe(.08);
@@ -130,6 +133,7 @@ describe('atomic AI and speech quota admission across UTC boundaries', () => {
     await context.service.completeJob(claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Synthetic answer.', actualUsd: .08 });
     context.clock.value = new Date('2026-10-31T12:00:00.000Z');
     const config = { ...voiceConfig, userDailyUsd: 10, userMonthlyUsd: .1 };
+    await voiceDebriefFixture(context.store,session.id);
     await expect(reserveVoice(context.store, config, voiceInput(session.id), context.clock.value)).rejects.toMatchObject({ code: 'quota' });
     expect(totals((await context.store.read()).ledger, context.clock.value.toISOString())).toMatchObject({ userDailyUsd: 0, userMonthlyUsd: .08 });
     context.clock.value = new Date(next);
@@ -137,11 +141,14 @@ describe('atomic AI and speech quota admission across UTC boundaries', () => {
   });
   it('keeps the shared global speech cap across owners despite prior-window AI settlements', async () => {
     const context = setup(prior); await boundarySettlement(context); const a = await context.create('owner-b'), b = await context.create('owner-c'), config = { ...voiceConfig,userDailyUsd: 10,globalDailyUsd: .1 };
+    await voiceDebriefFixture(context.store,a.id); await voiceDebriefFixture(context.store,b.id);
     const first = await reserveVoice(context.store,config,voiceInput(a.id,'owner-b'),context.clock.value); await settleVoice(context.store,first,false,context.clock.value);
     await expect(reserveVoice(context.store,config,voiceInput(b.id,'owner-c'),context.clock.value)).rejects.toMatchObject({ code: 'quota' });
   });
   it('retains voice reservation budgetAt on a zero-value terminal posting after midnight', async () => {
-    const context = setup(prior), session = await context.create(), reservation = await reserveVoice(context.store,voiceConfig,voiceInput(session.id),context.clock.value);
+    const context = setup(prior), session = await context.create();
+    await voiceDebriefFixture(context.store,session.id);
+    const reservation = await reserveVoice(context.store,voiceConfig,voiceInput(session.id),context.clock.value);
     context.clock.value = new Date(next); await settleVoice(context.store,reservation,true,context.clock.value);
     const terminal = (await context.store.read()).ledger.find(entry => entry.operationId === `${reservation.key}:uncertain`)!;
     expect(terminal.createdAt).toBe(next); expect(terminal.budgetAt).toBe(prior); expect(terminal.amountUsd).toBe(0);

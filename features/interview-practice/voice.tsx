@@ -4,7 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import { Mic, Square, Volume2 } from "lucide-react";
 import { toPcmWav } from "./voice-audio";
 
-export function VoiceControls({ sessionId, enabled, active, latestQuestion, onTranscript }: { sessionId: string; enabled: boolean; active: boolean; latestQuestion?: { id: string; text: string }; onTranscript: (text: string, source: "transcribed" | "corrected") => void }) {
+type VoiceProps = { sessionId: string; configured: boolean; selected: boolean; debrief: boolean; active: boolean; latestQuestion?: { id: string; text: string }; onTranscript: (text: string, source: "transcribed" | "corrected") => void };
+export function VoiceControls(props: VoiceProps) {
+  const { configured, selected, debrief, active } = props;
+  const unavailable = !configured ? "Voice not configured · Continue in text" : !selected ? "Text selected for this attempt · Voice is off" : !debrief ? "Voice is available during the debrief. Finish coding to use it; continue in text." : !active ? "Voice is available during an active debrief. Continue in text." : null;
+  if (unavailable) return <div className="voice-off"><Mic size={14} aria-hidden="true" /><span>{unavailable}</span></div>;
+  // Unmounting the active controls releases capture and playback whenever the
+  // saved opt-in, provider capability, stage, lifecycle, or role tab changes.
+  return <ActiveVoiceControls {...props} />;
+}
+function ActiveVoiceControls({ sessionId, active, latestQuestion, onTranscript }: VoiceProps) {
   const [consent, setConsent] = useState(false); const [recording, setRecording] = useState(false); const [busy, setBusy] = useState(false); const [playing, setPlaying] = useState(false);
   const [seconds, setSeconds] = useState(0); const [original, setOriginal] = useState(""); const [draft, setDraft] = useState(""); const [error, setError] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null); const streamRef = useRef<MediaStream | null>(null); const audioRef = useRef<HTMLAudioElement | null>(null); const abortRef = useRef<AbortController | null>(null); const audioUrlRef = useRef(""); const timerRef = useRef<ReturnType<typeof setInterval> | null>(null); const aliveRef = useRef(true);
@@ -48,7 +57,5 @@ export function VoiceControls({ sessionId, enabled, active, latestQuestion, onTr
       const url = URL.createObjectURL(blob); audioUrlRef.current = url; const audio = new Audio(url); audioRef.current = audio; audio.onended = () => { if (audioRef.current === audio) stopPlayback(); }; audio.onerror = () => { if (audioRef.current === audio) { setError("Question audio could not play. Read the visible question."); stopPlayback(); } }; await audio.play();
     } catch (e) { if (aliveRef.current && (e as Error).name !== "AbortError") setError((e as Error).message); if (aliveRef.current && abortRef.current === controller) stopPlayback(); }
   }
-  if (!enabled) return <div className="voice-off"><Mic size={14} aria-hidden="true" /><span>Voice not configured · Continue in text</span></div>;
-  if (!active) return <div className="voice-off"><Mic size={14} aria-hidden="true" /><span>Voice is available while this attempt is active.</span></div>;
   return <div className="voice-controls"><label className="voice-consent"><input type="checkbox" checked={consent} disabled={recording || busy || playing} onChange={(event) => setConsent(event.target.checked)} /><span>Allow sending recordings and selected interviewer questions to Deepgram for speech processing.</span></label><div className="voice-toolbar"><button className={`button small ${recording ? "recording" : ""}`} disabled={!consent || busy || playing} onClick={() => recording ? recorderRef.current?.stop() : record()}>{recording ? <Square size={14} /> : <Mic size={14} />}{recording ? "Stop recording" : busy ? "Transcribing…" : "Record answer"}</button><button className="icon-button" onClick={() => playing ? stopPlayback() : speak()} disabled={!consent || !latestQuestion || recording || busy} aria-label={playing ? "Stop question audio" : "Play latest question"}>{playing ? <Square size={16} /> : <Volume2 size={16} />}</button>{busy && <button className="text-button" onClick={() => abortRef.current?.abort()}>Cancel transcription</button>}</div>{recording && <p role="status">Recording · {seconds}s of 60s. Stop when you finish.</p>}{draft && <div className="transcript-review"><label htmlFor="voice-transcript">Review your transcript</label><textarea id="voice-transcript" value={draft} onChange={(e) => setDraft(e.target.value)} rows={3} /><div><button className="button small" disabled={!draft.trim()} onClick={() => { onTranscript(draft, draft === original ? "transcribed" : "corrected"); setDraft(""); setOriginal(""); }}>Use transcript</button><button className="text-button" onClick={() => { setDraft(""); setOriginal(""); }}>Discard</button></div><p className="muted">Review first, then send from the message box. Recordings are processed in memory and are not saved by Interview Lab.</p></div>}{error && <p className="error-text" role="alert">{error}</p>}</div>;
 }

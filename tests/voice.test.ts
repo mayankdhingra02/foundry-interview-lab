@@ -6,6 +6,7 @@ import { SessionService } from '../lib/server/session-service';
 import { voiceConfig, type VoiceConfig } from '../lib/voice/config';
 import { mp3Duration, wavDuration } from '../lib/voice/audio';
 import { reserveVoice, settleVoice } from '../lib/voice/ledger';
+import { voiceDebriefFixture } from './voice-fixtures';
 import { boundedBytes, VoiceService } from '../lib/voice/provider';
 
 const config: VoiceConfig = { apiKey: 'fixture-not-a-key', sttUsdPerMinute: 0.0043, ttsUsdPerThousandChars: 0.03, sessionMinutes: 20, userDailyMinutes: 60, globalDailyMinutes: 600, sessionUsd: 1, userDailyUsd: 5, userMonthlyUsd: 50, globalDailyUsd: 50 };
@@ -23,7 +24,8 @@ let store: MemoryPracticeStore, sessions: SessionService, sessionId: string;
 const fetcher = vi.fn<typeof fetch>();
 beforeEach(async () => {
   store = new MemoryPracticeStore(); sessions = new SessionService(store, getScenario);
-  sessionId = (await sessions.createSession('owner-a', { scenarioId: 'monetary-validation', requestId: randomUUID() })).session.id;
+  sessionId = (await sessions.createSession('owner-a', { scenarioId: 'monetary-validation', voice: true, requestId: randomUUID() })).session.id;
+  await voiceDebriefFixture(store,sessionId);
   fetcher.mockReset();
 });
 const voice = () => new VoiceService(store, config, fetcher, () => at);
@@ -62,6 +64,28 @@ describe('voice availability and bounded formats', () => {
 });
 
 describe('speech boundary and ephemeral results', () => {
+  it.each([false,undefined])('requires a persisted voice opt-in, treating historical absent preference as text: %s', async selected => {
+    await store.transaction(db => { db.sessions[sessionId].configuration.voice = selected; });
+    const before = await store.read();
+    await expect(voice().checkOwner('owner-a',sessionId)).rejects.toMatchObject({ code: 'voice_not_selected',status: 403 });
+    await expect(voice().transcribe('owner-a',sessionId,randomUUID(),wav(),true)).rejects.toMatchObject({ code: 'voice_not_selected' });
+    await expect(reserveVoice(store,config,admission(),at)).rejects.toMatchObject({ code: 'voice_not_selected' });
+    expect(fetcher).not.toHaveBeenCalled(); expect(await store.read()).toEqual(before);
+  });
+  it('rejects selected voice before the debrief without spending or changing saved work', async () => {
+    await store.transaction(db => { db.sessions[sessionId].stageId = 'inspect'; db.sessions[sessionId].codeFrozenSnapshotId = null; });
+    const before = await store.read();
+    await expect(voice().transcribe('owner-a',sessionId,randomUUID(),wav(),true)).rejects.toMatchObject({ code: 'voice_debrief_required',status: 409 });
+    await expect(reserveVoice(store,config,admission(),at)).rejects.toMatchObject({ code: 'voice_debrief_required' });
+    expect(fetcher).not.toHaveBeenCalled(); expect(await store.read()).toEqual(before);
+  });
+  it('checks opt-in again atomically after a successful preliminary owner check', async () => {
+    await voice().checkOwner('owner-a',sessionId);
+    await store.transaction(db => { db.sessions[sessionId].configuration.voice = false; });
+    const before = await store.read();
+    await expect(reserveVoice(store,config,admission(),at)).rejects.toMatchObject({ code: 'voice_not_selected' });
+    expect(await store.read()).toEqual(before); expect(fetcher).not.toHaveBeenCalled();
+  });
   it('requires consent, ownership and an active attempt before any provider call', async () => {
     await expect(voice().transcribe('owner-a', sessionId, randomUUID(), wav(), false)).rejects.toMatchObject({ code: 'voice_consent_required' });
     await expect(voice().transcribe('owner-b', sessionId, randomUUID(), wav(), true)).rejects.toMatchObject({ code: 'not_found' });
@@ -121,6 +145,14 @@ describe('speech boundary and ephemeral results', () => {
     expect((await store.read()).sessions[sessionId]).toBeUndefined();
     expect(JSON.stringify(await store.read())).not.toContain('rounding boundary');
   });
+  it('discards a provider result when voice selection no longer permits it while retaining actual accounting', async () => {
+    fetcher.mockImplementation(async () => { await store.transaction(db => { db.sessions[sessionId].configuration.voice = false; }); return recognized(); });
+    await expect(voice().transcribe('owner-a',sessionId,randomUUID(),wav(),true)).rejects.toMatchObject({ code: 'voice_session_changed' });
+    const saved = await store.read();
+    expect(saved.sessions[sessionId].usage.spentUsd).toBeGreaterThan(0);
+    expect(saved.sessions[sessionId].usage.reservedUsd).toBe(0);
+    expect(JSON.stringify(saved)).not.toContain('rounding boundary');
+  });
 });
 
 describe('atomic speech admission', () => {
@@ -132,7 +164,8 @@ describe('atomic speech admission', () => {
   });
   it.each(['sessionMinutes', 'userDailyMinutes', 'globalDailyMinutes', 'sessionUsd', 'userDailyUsd', 'userMonthlyUsd', 'globalDailyUsd'] as const)('enforces %s across simultaneous requests', async scope => {
     const secondOwner = scope.startsWith('global') ? 'owner-b' : 'owner-a';
-    const secondId = scope.startsWith('session') ? sessionId : (await sessions.createSession(secondOwner, { scenarioId: 'monetary-validation', requestId: randomUUID() })).session.id;
+    const secondId = scope.startsWith('session') ? sessionId : (await sessions.createSession(secondOwner, { scenarioId: 'monetary-validation', voice: true, requestId: randomUUID() })).session.id;
+    if (secondId !== sessionId) await voiceDebriefFixture(store,secondId);
     const limited = { ...config, [scope]: scope.endsWith('Minutes') ? 1 : .3 };
     const results = await Promise.allSettled([
       reserveVoice(store, limited, admission(), at),

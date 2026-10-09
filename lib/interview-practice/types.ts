@@ -19,7 +19,7 @@ export type Scenario = {
 export type PublicScenario = Omit<Scenario, 'referenceFiles' | 'tests' | 'probes' | 'hints'> & {
   tests: Array<Omit<ScenarioTest, 'source'> & { source?: string }>;
 };
-export type SessionConfiguration = { role: string; level: string; skills: string[]; targetMinutes: number; aiHelp: boolean; accommodations: string[] };
+export type SessionConfiguration = { role: string; level: string; skills: string[]; targetMinutes: number; aiHelp: boolean; accommodations: string[]; voice?: boolean };
 export type Snapshot = { id: string; sequence: number; createdAt: string; sha256: string; files: Record<string, string> };
 export type Turn = { id: string; role: 'interviewer' | 'learner'; text: string; source: 'typed' | 'transcribed' | 'corrected' | 'model' | 'authored'; createdAt: string; replyTo?: string; competencyId?: string; evidenceIds: string[] };
 export type TestObservation = { id: string; title: string; status: 'passed' | 'failed' | 'error' | 'skipped'; detail?: string };

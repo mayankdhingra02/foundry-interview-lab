@@ -28,6 +28,32 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('authenticated practice HTTP contracts', () => {
+  it('persists explicit optional voice, defaults new attempts to text, and keeps setup separate from provider availability', async () => {
+    const first = await create(); expect(first.configuration.voice).toBe(false);
+    const body = { requestId: requestId(),scenarioId: 'monetary-validation',voice: true };
+    const response = await api('sessions','POST',body); expect(response.status).toBe(201);
+    const selected = (await response.json()).session;
+    expect(selected.configuration.voice).toBe(true);
+    expect((await (await api(`sessions/${selected.id}`)).json()).session.configuration.voice).toBe(true);
+    expect((await (await api(`sessions/${selected.id}/export`)).json()).session.configuration.voice).toBe(true);
+    expect((await (await api('sessions','POST',body)).json()).session.id).toBe(selected.id);
+    expect((await api('sessions','POST',{ ...body,voice: false })).status).toBe(409);
+    expect((await api('sessions','POST',{ ...body,requestId: requestId(),voice: 'true' })).status).toBe(400);
+    vi.stubEnv('FEATURE_VOICE','false');
+    const speech = await api(`sessions/${selected.id}/voice/speak`,'POST',{ requestId: requestId(),turnId: 'unavailable',consent: true });
+    expect(speech.status).toBe(503);
+    expect((await speech.json()).error.code).toBe('voice_unavailable');
+  });
+  it('replays historical text creation with explicit false but never upgrades an old stripped voice choice', async () => {
+    const body = { requestId: requestId(),scenarioId: 'monetary-validation' };
+    const original = (await (await api('sessions','POST',body)).json()).session;
+    // This is the old server's admitted input after unknown voice was stripped.
+    const replay = await api('sessions','POST',{ ...body,voice: false });
+    expect(replay.status).toBe(201); expect((await replay.json()).session.id).toBe(original.id);
+    expect((await api('sessions','POST',{ ...body,voice: true })).status).toBe(409);
+    expect((await service.getSession(ownerId,original.id)).configuration.voice).toBe(false);
+    expect(await service.listSessions(ownerId)).toHaveLength(1);
+  });
   it('serves a catalog without leaking protected tests, probes or reference solutions', async () => {
     const response = await api('scenarios', 'GET', undefined, {}, null), data = await response.json();
     expect(data.scenarios).toHaveLength(5);

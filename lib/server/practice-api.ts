@@ -19,7 +19,7 @@ import { admittedScenarios } from './rollout';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
-const creation = z.object({ scenarioId: z.string().max(100), version: z.string().max(30).optional(), mode: z.enum(['practice', 'simulation']).optional(), requestId: z.string().min(8).max(128), role: z.string().max(120).optional(), level: z.string().max(100).optional(), skills: z.array(z.string().max(100)).max(20).optional(), targetMinutes: z.number().int().min(5).max(180).optional(), aiHelp: z.boolean().optional(), accommodations: z.array(z.string().max(200)).max(10).optional() });
+const creation = z.object({ scenarioId: z.string().max(100), version: z.string().max(30).optional(), mode: z.enum(['practice', 'simulation']).optional(), requestId: z.string().min(8).max(128), role: z.string().max(120).optional(), level: z.string().max(100).optional(), skills: z.array(z.string().max(100)).max(20).optional(), targetMinutes: z.number().int().min(5).max(180).optional(), aiHelp: z.boolean().optional(), voice: z.boolean().optional(), accommodations: z.array(z.string().max(200)).max(10).optional() });
 
 function parsed<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);

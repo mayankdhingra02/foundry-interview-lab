@@ -4,6 +4,7 @@ import { getScenario } from '../lib/content/scenarios';
 import { MemoryPracticeStore } from '../lib/server/store';
 import { SessionService } from '../lib/server/session-service';
 import { handleVoiceRequest } from '../lib/voice/api';
+import { voiceDebriefFixture } from './voice-fixtures';
 
 const mocked = vi.hoisted(() => ({ getService: vi.fn() }));
 vi.mock('../lib/server/application', () => ({ getService: mocked.getService }));
@@ -21,12 +22,23 @@ const speech = (body: object) => new Request(`${origin}/api/interview-practice/s
 beforeEach(async () => {
   for (const [key, value] of Object.entries({ APP_URL: origin, FEATURE_VOICE: 'true', VOICE_QUALIFIED: 'true', DEEPGRAM_API_KEY: 'fixture-never-sent', VOICE_STT_USD_PER_MINUTE: '.0043', VOICE_TTS_USD_PER_1K_CHARS: '.03', VOICE_MAX_SESSION_MINUTES: '20', VOICE_MAX_USER_DAILY_MINUTES: '60', VOICE_MAX_GLOBAL_DAILY_MINUTES: '600', MAX_SESSION_USD: '1', MAX_DAILY_USER_USD: '5', MAX_MONTHLY_USER_USD: '50', VOICE_MAX_GLOBAL_DAILY_USD: '50' })) vi.stubEnv(key, value);
   store = new MemoryPracticeStore(); const service = new SessionService(store, getScenario);
-  id = (await service.createSession('owner-a', { scenarioId: 'monetary-validation', requestId: randomUUID() })).session.id;
+  id = (await service.createSession('owner-a', { scenarioId: 'monetary-validation', voice: true, requestId: randomUUID() })).session.id;
+  await voiceDebriefFixture(store,id);
   mocked.getService.mockResolvedValue(service); fetcher.mockReset(); vi.stubGlobal('fetch', fetcher);
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('authenticated voice dispatch helper', () => {
+  it('rejects text/default and coding attempts before parsing multipart or calling speech providers', async () => {
+    await store.transaction(db => { delete db.sessions[id].configuration.voice; });
+    const before = await store.read();
+    await expect(handleVoiceRequest(upload(new FormData()),'owner-a',id,'transcribe')).rejects.toMatchObject({ status: 403,code: 'voice_not_selected' });
+    expect(await store.read()).toEqual(before);
+    await store.transaction(db => { const session = db.sessions[id]; session.configuration.voice = true; session.codeFrozenSnapshotId = null; session.stageId = 'inspect'; });
+    await expect(handleVoiceRequest(upload(new FormData()),'owner-a',id,'transcribe')).rejects.toMatchObject({ status: 409,code: 'voice_debrief_required' });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect((await store.read()).ledger.filter(entry => entry.kind === 'reservation')).toEqual([]);
+  });
   it('fails closed when qualification is absent and checks origin and ownership before upload parsing', async () => {
     vi.stubEnv('VOICE_QUALIFIED', 'false');
     await expect(handleVoiceRequest(upload(form()), 'owner-a', id, 'transcribe')).rejects.toMatchObject({ status: 503 });

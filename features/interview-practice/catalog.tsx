@@ -10,6 +10,7 @@ import { api, ApiError, ensureIdentity, requestId } from "./client";
 import type { ScenarioResponse, SessionResponse, Capabilities } from "./contracts";
 import { usePreferences } from "./preferences";
 import { isDeletedRequest, pendingReplayExpired, readPendingRequests, writePendingRequests, type PendingRequest } from "./recovery";
+import { MicrophoneCheck } from "./microphone-check";
 
 export function PracticeCatalog() {
   const [data, setData] = useState<ScenarioResponse | null>(null);
@@ -44,6 +45,7 @@ function SetupDialog({ scenario, capabilities, onClose }: { scenario: PublicScen
   const [skills, setSkills] = useState<string[]>(scenario.tags.slice(0, 2));
   const [aiHelp, setAiHelp] = useState(true);
   const [voice, setVoice] = useState(false);
+  const [microphoneReady, setMicrophoneReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [interrupted, setInterrupted] = useState(false);
@@ -81,6 +83,7 @@ function SetupDialog({ scenario, capabilities, onClose }: { scenario: PublicScen
         if (stored) { wasPending = true; restoreStart(stored); throw new Error("An interrupted start is waiting. Retry to recover that session before starting another."); }
       }
       if (pendingStart.current && pendingReplayExpired(pendingStart.current)) throw new Error("The original replay window has expired or its clock is invalid. Review saved attempts, then explicitly discard this expired retry before starting again.");
+      if (!pendingStart.current && voice && !microphoneReady) throw new Error("Complete the local microphone check or choose Text before starting a voice session.");
       // A lost acknowledgement is not a failed admission. Keep the complete
       // original request until the server confirms its outcome.
       pendingStart.current ??= { payload: JSON.stringify({ scenarioId: scenario.id, mode, role, level, skills, targetMinutes: minutes, aiHelp, voice, requestId: requestId() }), uncertain: false, createdAt: new Date().toISOString(), title: scenario.title, scenarioVersion: scenario.version };
@@ -111,7 +114,8 @@ function SetupDialog({ scenario, capabilities, onClose }: { scenario: PublicScen
   }
   return <Dialog title="Set up your session" onClose={() => { if (!busy) onClose(); }}><form onSubmit={start}><p className="dialog-description">{originalTitle} <span className="muted">· Version {originalVersion}</span></p><fieldset disabled={busy || interrupted || initializing} aria-label="Session settings">
     <fieldset className="mode-options"><legend>Mode</legend><label className={mode === "practice" ? "choice selected" : "choice"}><input type="radio" name="mode" checked={mode === "practice"} onChange={() => setMode("practice")} /><span><strong>Practice</strong><span>Hints, pauses, and time to explore.</span></span></label><label className={mode === "simulation" ? "choice selected" : "choice"}><input type="radio" name="mode" checked={mode === "simulation"} onChange={() => setMode("simulation")} /><span><strong>Simulation</strong><span>Set your help policy before starting.</span></span></label></fieldset>
-    <div className="form-grid"><label>Role<select value={role} onChange={(e) => setRole(e.target.value)}><option>Backend engineer</option><option>Full stack engineer</option><option>Platform engineer</option></select></label><label>Target level<select value={level} onChange={(e) => setLevel(e.target.value)}>{[...new Set([level, scenario.level, "Junior", "Mid-level", "Senior"])].map((l) => <option key={l}>{l}</option>)}</select></label><label>Target duration (advisory)<select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>{[...new Set([minutes, 30, 45, 60, scenario.durationMinutes])].sort((a,b) => a-b).map((n) => <option value={n} key={n}>{n} minutes</option>)}</select></label><label>Conversation<select value={voice ? "voice" : "text"} onChange={(e) => setVoice(e.target.value === "voice")}><option value="text">Text</option><option value="voice" disabled={!capabilities.voice}>Voice {capabilities.voice ? "" : "— not configured"}</option></select></label></div>
+    <div className="form-grid"><label>Role<select value={role} onChange={(e) => setRole(e.target.value)}><option>Backend engineer</option><option>Full stack engineer</option><option>Platform engineer</option></select></label><label>Target level<select value={level} onChange={(e) => setLevel(e.target.value)}>{[...new Set([level, scenario.level, "Junior", "Mid-level", "Senior"])].map((l) => <option key={l}>{l}</option>)}</select></label><label>Target duration (advisory)<select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>{[...new Set([minutes, 30, 45, 60, scenario.durationMinutes])].sort((a,b) => a-b).map((n) => <option value={n} key={n}>{n} minutes</option>)}</select></label><label>Conversation<select value={voice ? "voice" : "text"} onChange={(e) => { setMicrophoneReady(false); setVoice(e.target.value === "voice"); }}><option value="text">Text</option><option value="voice" disabled={!capabilities.voice}>Voice {capabilities.voice ? "" : "— not configured"}</option></select></label></div>
+    {voice && !interrupted && <MicrophoneCheck onReady={setMicrophoneReady} onText={() => { setMicrophoneReady(false); setVoice(false); }} />}
     <p className="setup-context">The task uses its published requirements and rubric. Your selections record your preparation goals.</p><fieldset className="skill-options"><legend>Skills to focus on</legend>{[...new Set([...scenario.tags, ...skills])].map((tag) => <label key={tag}><input type="checkbox" checked={skills.includes(tag)} onChange={(e) => setSkills(e.target.checked ? [...skills, tag] : skills.filter((s) => s !== tag))} />{tag}</label>)}</fieldset>
     <label className="checkbox-row"><input type="checkbox" checked={aiHelp} onChange={(e) => setAiHelp(e.target.checked)} /><span><strong>Allow the coding assistant</strong><span>{capabilities.ai ? "Ask questions or preview proposed edits. Your use of help is recorded." : "AI is not configured. Authored interview questions and deterministic feedback remain available."}</span></span></label>
     </fieldset>
@@ -120,6 +124,6 @@ function SetupDialog({ scenario, capabilities, onClose }: { scenario: PublicScen
     {interrupted && <p className="role-note" role="status">{expiredStart ? "The original replay window has expired or its clock is invalid. This request cannot be replayed. Review saved attempts, then explicitly discard the expired retry before starting a new session." : "The start request may have completed. Retry to recover the same session, or review your saved attempts. Your original settings stay fixed until its outcome is confirmed. This tab retains the pending request when you close setup or reload."}</p>}
     {recoveryNotice && <p className="role-note" role="status">{recoveryNotice}</p>}
     {error && <ErrorNotice message={error} />}
-    <div className="dialog-actions">{interrupted && <Link className="button" href="/history">Review saved attempts</Link>}{expiredStart && <button type="button" className="button" disabled={busy} onClick={() => void discardExpiredStart()}>Discard expired retry</button>}<button type="button" className="button" onClick={onClose} disabled={busy}>{interrupted ? "Close setup" : "Cancel"}</button><button className="button primary" disabled={busy || initializing || expiredStart}>{busy ? "Starting…" : initializing ? "Checking saved request…" : interrupted ? "Retry start" : "Start session"}<ArrowRight size={16} /></button></div>
+    <div className="dialog-actions">{interrupted && <Link className="button" href="/history">Review saved attempts</Link>}{expiredStart && <button type="button" className="button" disabled={busy} onClick={() => void discardExpiredStart()}>Discard expired retry</button>}<button type="button" className="button" onClick={onClose} disabled={busy}>{interrupted ? "Close setup" : "Cancel"}</button><button className="button primary" disabled={busy || initializing || expiredStart || (!interrupted && voice && !microphoneReady)}>{busy ? "Starting…" : initializing ? "Checking saved request…" : interrupted ? "Retry start" : "Start session"}<ArrowRight size={16} /></button></div>
   </form></Dialog>;
 }
