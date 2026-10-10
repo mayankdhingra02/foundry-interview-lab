@@ -63,6 +63,18 @@ describe('authenticated practice HTTP contracts', () => {
     }
     expect(response.headers.get('cache-control')).toContain('no-store');
   });
+  it('serves bound original-task prerequisites in catalog and progression without changing admitted attempts', async () => {
+    const catalog = await (await api('scenarios')).json();
+    expect(catalog.scenarios.filter((scenario: { preparation?: unknown }) => scenario.preparation)).toHaveLength(5);
+    const money = catalog.scenarios.find((scenario: { id: string }) => scenario.id === 'monetary-validation');
+    expect(money.preparation).toMatchObject({ version: '1', scenarioId: money.id, scenarioVersion: money.version, reviewStatus: 'draft' });
+    const progressResponse = await api('progress'), progress = await progressResponse.json();
+    expect(progressResponse.status).toBe(200);
+    expect(progress.recommendations.find((item: { scenarioId: string }) => item.scenarioId === money.id).prerequisites).toEqual(money.preparation.prerequisites);
+    const created = await create();
+    expect(created.scenario.preparation).toBeUndefined();
+    expect((await (await api(`sessions/${created.id}/export`)).json()).session.scenario.preparation).toBeUndefined();
+  });
   it('rejects anonymous sessions and another signed owner', async () => {
     expect((await api('sessions', 'GET', undefined, {}, null)).status).toBe(401);
     const session = await create(), other = localIdentityCookie().cookie;
