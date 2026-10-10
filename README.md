@@ -6,7 +6,7 @@ Foundry Interview Lab is an interview preparation product within Engineering Fou
 
 ## Current status
 
-The core practice workflow is implemented in a stack of focused, unmerged [pull requests](https://github.com/mayankdhingra02/foundry-interview-lab/pulls). Additional design requirements and release evidence remain open. `main` contains the initial planning baseline until changes are reviewed and merged. See [delivery status](docs/delivery-status.md) for recorded checks and [the design acceptance audit](docs/design-acceptance.md) for remaining engineering and qualification work. The application has not been publicly deployed.
+The core practice workflow and follow-up fixes are merged into `main` through PR #70 at the owner's request. See [the focused PR history](https://github.com/mayankdhingra02/foundry-interview-lab/pulls?q=is%3Apr+is%3Amerged), [delivery status](docs/delivery-status.md) for recorded checks, and [the design acceptance audit](docs/design-acceptance.md) for remaining qualification work. The application has not been publicly deployed.
 
 The source repository is public at the owner's request. Its standard GitHub-hosted CI runners receive free public-repository minutes. Authored solutions, protected checks and development fixtures are public preparation material; “protected” describes omission from ordinary application responses. Private attempts and actual acceptance/holdout artifacts belong outside Git. See [CI and public-source boundaries](docs/ci.md#public-repository-and-actions-scope).
 
@@ -14,7 +14,7 @@ The source repository is public at the owner's request. Its standard GitHub-host
 
 - [Delivery status and release gates](docs/delivery-status.md).
 - [Design acceptance audit and remaining engineering](docs/design-acceptance.md).
-- [Pull request dependency/review order](docs/pr-stack.md).
+- [Pull request history and original dependencies](docs/pr-stack.md).
 - [Product roadmap and technical design](docs/design.md) — canonical, version-controlled planning document.
 - [Formatted Word document](docs/Engineering_Foundry_AI_Interview_Practice_Design.docx) — downloadable edition of the initial design.
 - [System architecture](docs/assets/architecture.png).
@@ -43,7 +43,7 @@ Production starts closed to new attempts by default. Code and deterministic chec
 
 ## Run locally
 
-Use Node 24 and Python 3.11. Check out the latest implementation branch in the PR stack, then:
+Use Node 24 and Python 3.11. Check out `main`, then:
 
 ```sh
 npm ci
