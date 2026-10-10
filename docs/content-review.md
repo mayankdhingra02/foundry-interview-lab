@@ -2,6 +2,8 @@
 
 The initial catalog contains five distinct Python preparation tasks. Each package has a disclosed contract, editable starter files, one complete reference, public and protected contract checks, four interview stages, three anchored rubric criteria, three graduated hints, three debrief probes, three focused drills covering every criterion, misconception notes, an explanation, and provenance. Protected checks add coverage of the disclosed requirements; they do not introduce surprise requirements.
 
+The owner has made the source repository public. Authored references, protected checks, hints, probes and explanations in these packages and the three [level drafts](curriculum.md) are publicly readable. Application responses still omit protected author material; this is not source confidentiality or proof of a fresh/unseen task. Review distribution rights for already-public assets as well as every admitted immutable version. Private attempts on public tasks can support feedback evaluation, while confidential holdout families and fresh-task transfer material need separate custody, independent review and recorded exposure. See [the public-source boundary](ci.md#public-repository-and-actions-scope).
+
 | Package | Main capability | Automated reference checks | Expected starter gap |
 | --- | --- | --- | --- |
 | monetary-validation | Integer monetary arithmetic, half-up rounding, exact validation | 9 passing | Half-cent rounding and invalid quantities |

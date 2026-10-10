@@ -45,7 +45,7 @@ All three drafts and the original `inventory-reservations` share the stable fami
 
 Session admission records a variant as repeated when that owner retains any same-family attempt. Progression conservatively infers repeats in chronological order and preserves already-recorded repeated flags. Same-family recommendations have `fresh:false`; a harder or easier variant cannot establish an unseen retest or add another fresh family to broader coverage. Rubric histories still retain their exact scenario/version/criterion and practice conditions: editorial transfer suggestions do not put different rubrics on an identical scale.
 
-Exposure is based on saved account history, not global novelty. Deleted/off-platform exposure is unknown; this patch does not retain undisclosed content or family histories after deletion. A previously recorded repeated attempt stays repeated when an earlier attempt is deleted. Future attempts cannot prove global novelty from absent history. Family-level limitation text remains visible in the study plan.
+Exposure is based on saved account history, not global novelty. Deleted/off-platform exposure, including reading the now-public scenario source, is unknown; this patch does not retain undisclosed content or family histories after deletion. A previously recorded repeated attempt stays repeated when an earlier attempt is deleted. Future attempts cannot prove global novelty from absent history. Family-level limitation text remains visible in the study plan. Public source availability alone does not establish exposure by a particular learner.
 
 ## Qualification evidence and remaining gates
 
