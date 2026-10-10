@@ -33,7 +33,7 @@ function transport(records: Record<string, Row[]> = {}, options: TransportOption
       return { rows: options.entities?.(rows) ?? rows };
     }
     if (sql.includes('as projected_bytes')) {
-      const projections = new Map([...sql.matchAll(/from public\.([a-z_]+) as source cross join lateral \(select ([a-z0-9_.,]+)\) as projected/g)].map(match => [match[1], match[2].split(',').map(column => column.replace('source.', ''))]));
+      const projections = new Map([...sql.matchAll(/from public\.([a-z_]+) as transport_source cross join lateral \(select ([a-z0-9_.,]+)\) as projected/g)].map(match => [match[1], match[2].split(',').map(column => column.replace('transport_source.', ''))]));
       expect(projections.size).toBe(present.length);
       const metrics = present.map(table_name => { const rows = records[table_name] ?? []; return { table_name, count: String(rows.length), full_bytes: String(rows.reduce((sum,row) => sum + Buffer.byteLength(JSON.stringify(row)),0)), projected_bytes: String(rows.reduce((sum,row) => sum + Buffer.byteLength(JSON.stringify(project(row,projections.get(table_name)!))),0)) }; });
       return { rows: options.metrics?.(metrics) ?? metrics };
