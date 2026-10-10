@@ -1,3 +1,4 @@
+import { fixtureRuntimeId } from './runtime-fixtures';
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { PostgresPracticeStore, type PostgresStoreOptions } from '../lib/server/postgres-store';
@@ -54,7 +55,7 @@ async function fixture(reviews = false, rich = false) {
     await context.practice.decideEdit(owner,created.id,{ ...await mutation(),proposalId: proposal.id,decision: 'accept' });
     for (let index = 0; index < 2; index++) {
       await context.practice.requestRun(owner,created.id,await mutation()); const run = (await context.practice.claimJob('fixture-worker'))!;
-      await context.practice.completeJob(run,{ kind: 'run',run: { status: 'completed',command: 'Synthetic fixture',stdout: '',stderr: '',exitCode: 1,durationMs: 1,tests: [{ id: 'smoke',title: 'Smoke',status: 'failed' }] } });
+      await context.practice.completeJob(run,{ kind: 'run',run: { runtimeDigest: fixtureRuntimeId, status: 'completed',command: 'Synthetic fixture',stdout: '',stderr: '',exitCode: 1,durationMs: 1,tests: [{ id: 'smoke',title: 'Smoke',status: 'failed' }] } });
     }
     await context.practice.command(owner,created.id,{ ...await mutation(),action: 'finish' }); const question = (await context.practice.claimJob('fixture-worker'))!;
     await context.practice.completeJob(question,{ kind: 'interviewer',model: 'authored',actualUsd: 0,proposal: { action: 'ask_probe',question: 'What did you check?',competencyId: 'correctness',evidenceIds: [],probeId: 'p1' } });

@@ -5,10 +5,11 @@ import { budgetTotals, reservationBudgetAt } from '../interview-practice/quota';
 import { admissionLimits, assertJobAdmission, assertMutationAdmission, assertMutationGrowth, captureMutationGrowth, mutationAdmissionMetadata, mutationLane, type AdmissionLimits } from '../interview-practice/admission';
 import type { InferenceRecord, JobClaim, JobKind, JobResult, JobView, Mutation, PracticeDatabase, PracticeJob, Scenario, Session, SessionConfiguration, SessionView } from '../interview-practice/types';
 import type { PracticeStore } from './store';
+import { configuredRuntimeBinding, parseRuntimeBinding, type RuntimeBinding } from '../runtime/binding';
 import { assertRequestNotErased, rememberErasedRequests } from './deleted-requests';
 
 export type SessionAdmissionContext = { ownerId: string; sessionId: string; scenarioId: string; scenarioVersion: string; requestId: string; now: string; database: PracticeDatabase };
-export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void>; admissionLimits?: Partial<AdmissionLimits> };
+export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void>; admissionLimits?: Partial<AdmissionLimits>; runtimeBinding?: (scenario: Scenario) => RuntimeBinding | null };
 export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; accommodations?: string[] };
 export type SessionMutationResult = { session: SessionView; job?: JobView; hint?: string };
 export type TrustedSupportGuard = (database: PracticeDatabase, now: string) => void;
@@ -24,7 +25,8 @@ export function sessionView(session: Session): SessionView {
 }
 export class SessionService {
   private readonly now: () => Date;
-  private readonly limits: Required<Omit<ServiceOptions, 'now' | 'reservations' | 'admissionPolicy' | 'admissionLimits'>>;
+  private readonly limits: Required<Omit<ServiceOptions, 'now' | 'reservations' | 'admissionPolicy' | 'admissionLimits' | 'runtimeBinding'>>;
+  private readonly resolveRuntimeBinding: (scenario: Scenario) => RuntimeBinding | null;
   private readonly admissionLimits: AdmissionLimits;
   private readonly admissionPolicy: ServiceOptions['admissionPolicy'];
   private readonly reservations: Record<JobKind, number>;
@@ -32,8 +34,9 @@ export class SessionService {
     this.now = options.now ?? (() => new Date());
     this.admissionPolicy = options.admissionPolicy;
     this.admissionLimits = admissionLimits(options.admissionLimits);
-    const { now: _now, reservations: _reservations, admissionPolicy: _policy, admissionLimits: _admissionLimits, ...limits } = options;
-    void _now; void _reservations; void _policy; void _admissionLimits;
+    this.resolveRuntimeBinding = options.runtimeBinding ?? configuredRuntimeBinding;
+    const { now: _now, reservations: _reservations, admissionPolicy: _policy, admissionLimits: _admissionLimits, runtimeBinding: _runtimeBinding, ...limits } = options;
+    void _now; void _reservations; void _policy; void _admissionLimits; void _runtimeBinding;
     this.limits = { maxDailySessions: 10, maxActiveSessions: 3, maxDailyUsd: 5, maxMonthlyUsd: 50, maxGlobalDailyUsd: 50, maxSessionUsd: 1, maxRuns: 30, maxAiCalls: 25, leaseMs: 60_000, ...limits };
     this.reservations = { run: 0, interviewer: 0.04, assistant: 0.08, coach: 0.15, ...options.reservations };
     if (Object.values(this.limits).some(value => !Number.isFinite(value) || value <= 0) || Object.values(this.reservations).some(value => !Number.isFinite(value) || value < 0)) throw new DomainError('invalid', 'Practice limits must be finite positive numbers and reservations nonnegative.');
@@ -92,6 +95,7 @@ export class SessionService {
       job.reservedUsd = 0; job.input.forceAuthored = true;
       this.reserve(db, session, job, 0, now);
     }
+    job.fingerprint = digest(job.input);
     session.jobs.push(job);
     if (kind === 'run') session.usage.runs += 1; else if (!job.input.forceAuthored) session.usage.aiCalls += 1;
     return job;
@@ -200,7 +204,9 @@ export class SessionService {
     return this.mutate(ownerId, input.requestId, 'run', {}, id, (db, now) => {
       const session = ownedSession(db.sessions, ownerId, id); assertRevision(session, input.expectedRevision); assertActive(session);
       if (session.frozenEvidence) throw new DomainError('conflict', 'Final evidence is frozen.');
-      const scenario = this.scenario(session), job = this.enqueue(db, session, 'run', input.requestId, { testSuiteDigest: digest(scenario.tests), runtime: scenario.runtime }, now);
+      const scenario = this.scenario(session), runtimeBinding = parseRuntimeBinding(this.resolveRuntimeBinding(scenario), scenario.runtime.image);
+      if (!runtimeBinding) throw new DomainError('unavailable', 'Code execution is unavailable until a reviewed runtime is configured. Your saved work is available.');
+      const job = this.enqueue(db, session, 'run', input.requestId, { testSuiteDigest: digest(scenario.tests), runtime: scenario.runtime, runtimeBinding }, now);
       appendEvent(session, 'test.requested', { jobId: job.id, snapshotId: job.snapshotId }, input.requestId, now, 'learner');
       return { session: sessionView(session), job: publicJob(job) };
     });
@@ -307,7 +313,9 @@ export class SessionService {
       if (!snapshot) throw new DomainError('unavailable', 'Admitted snapshot not found.');
       if (result.kind === 'run') {
         const run = result.run;
+        const binding = parseRuntimeBinding(job.input.runtimeBinding, scenario.runtime.image);
         if (!['completed', 'infrastructure_error', 'timeout'].includes(run.status) || !Number.isFinite(run.durationMs) || run.durationMs < 0 || typeof run.command !== 'string' || run.command.length > 1000 || typeof run.stdout !== 'string' || typeof run.stderr !== 'string' || run.stdout.length + run.stderr.length > 128_000 || !Array.isArray(run.tests) || run.tests.length > 100 || new Set(run.tests.map(t => t.id)).size !== run.tests.length || run.tests.some(t => !scenario.tests.some(test => test.id === t.id) || !['passed', 'failed', 'error', 'skipped'].includes(t.status) || typeof t.title !== 'string' || (t.detail?.length ?? 0) > 5000)) throw new DomainError('invalid', 'Runner returned invalid or unknown test observations.');
+        if (!binding || (run.runtimeDigest !== undefined && run.runtimeDigest !== binding.imageId) || ((run.status === 'completed' || run.tests.some(test => test.status !== 'skipped')) && run.runtimeDigest !== binding.imageId)) throw new DomainError('invalid', 'Run evidence does not match its admitted immutable runtime. No test evidence was accepted.');
         if (run.status !== 'completed' && run.tests.length && run.tests.every(t => t.status === 'passed')) throw new DomainError('invalid', 'An incomplete run cannot claim every reported check passed. Retain completed observations alongside explicit missing checks.');
         const record = { ...structuredClone(run), id: randomUUID(), jobId: job.id, snapshotId: snapshot.id, snapshotSha256: snapshot.sha256, testSuiteDigest: String(job.input.testSuiteDigest), createdAt: now };
         session.runs.push(record); appendEvent(session, 'test.completed', { runId: record.id, jobId: job.id, snapshotId: snapshot.id, status: run.status }, job.requestId, now, 'runner');

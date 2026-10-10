@@ -15,6 +15,7 @@ const imageId = `sha256:${'a'.repeat(64)}`;
 const nonce = 'b'.repeat(32);
 const spawnMock = vi.mocked(spawn);
 const actualProcess = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+const qualifiedImageId = process.env.PYTHON_IMAGE_ID;
 const example = () => getScenario('monetary-validation')!;
 const publicTest = () => example().tests.find(test => test.visible)!;
 
@@ -22,7 +23,7 @@ function row(test: ScenarioTest, resultNonce = nonce, status = 'passed', testsRu
   return `FOUNDRY_CHECK_${resultNonce}:${JSON.stringify({ id: test.id, nonce: resultNonce, status, testsRun, detail: '' })}\n`;
 }
 
-type FakeOptions = { hangStart?: boolean; cleanupFails?: boolean; outputFlood?: boolean; onStart?: () => void };
+type FakeOptions = { hangStart?: boolean; cleanupFails?: boolean; outputFlood?: boolean; onStart?: () => void; inspectId?: string; imageMissing?: boolean };
 function installFakeDocker(options: FakeOptions = {}) {
   const calls: string[][] = [];
   spawnMock.mockImplementation((_program, argumentList) => {
@@ -51,7 +52,10 @@ function installFakeDocker(options: FakeOptions = {}) {
       });
     } else {
       queueMicrotask(() => {
-        if (args[0] === 'image') stdout.write(imageId + '\n');
+        if (args[0] === 'image') {
+          if (options.imageMissing) { stderr.write('No such image'); close(1); return; }
+          stdout.write((options.inspectId ?? imageId) + '\n');
+        }
         if (args[0] === 'create') stdout.write('container-id\n');
         if (args[0] === 'rm' && options.cleanupFails) { stderr.write('Docker daemon unavailable'); close(1); }
         else close(0);
@@ -67,6 +71,7 @@ beforeEach(() => {
   spawnMock.mockReset();
   vi.stubEnv('RUNNER_MODE', 'docker');
   vi.stubEnv('PYTHON_IMAGE', 'python:3.11-slim');
+  vi.stubEnv('PYTHON_IMAGE_ID', imageId);
   vi.stubEnv('RUNNER_ALLOWED_IMAGES', 'python:3.11-slim');
 });
 afterEach(() => { vi.unstubAllEnvs(); });
@@ -146,6 +151,36 @@ describe('snapshot runner contracts', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('executes the admitted image ID even after the configured alias and pin change', async () => {
+    const calls = installFakeDocker(), scenario = example();
+    vi.stubEnv('PYTHON_IMAGE', 'different:latest');
+    vi.stubEnv('PYTHON_IMAGE_ID', `sha256:${'c'.repeat(64)}`);
+    const result = await executeScenario(scenario, scenario.files, { runtimeBinding: { version: 1, scenarioImage: scenario.runtime.image, imageAlias: 'python:3.11-slim', imageId } });
+    expect(result.status).toBe('completed');
+    expect(result.runtimeDigest).toBe(imageId);
+    expect(calls[0]).toEqual(['image','inspect',imageId,'--format','{{.Id}}']);
+    expect(calls.find(args => args[0] === 'create')).toContain(imageId);
+    expect(calls.flat()).not.toContain('different:latest');
+  });
+
+  it.each([{ imageMissing: true }, { inspectId: `sha256:${'c'.repeat(64)}` }])('does not create or pull a container when the admitted cached image is absent or mismatched: %j', async options => {
+    const calls = installFakeDocker(options), scenario = example();
+    const result = await executeScenario(scenario,scenario.files);
+    expect(result.status).toBe('infrastructure_error');
+    expect(result.tests).toEqual([]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].slice(0,3)).toEqual(['image','inspect',imageId]);
+  });
+
+  it('fails closed on an absent pin and an invalid explicit binding before Docker I/O', async () => {
+    const scenario = example();
+    vi.stubEnv('PYTHON_IMAGE_ID','');
+    expect(configuredRunner()).toBe(false);
+    expect((await executeScenario(scenario,scenario.files)).status).toBe('infrastructure_error');
+    expect((await executeScenario(scenario,scenario.files,{ runtimeBinding: { version: 1, scenarioImage: 'foreign:latest',imageAlias: scenario.runtime.image,imageId } })).status).toBe('infrastructure_error');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('does not admit an already cancelled run', async () => {
     const controller = new AbortController(); controller.abort();
     const scenario = example();
@@ -204,7 +239,7 @@ describe('snapshot runner contracts', () => {
 
 const realDocker = process.env.FOUNDRY_DOCKER_INTEGRATION === '1';
 describe.runIf(realDocker)('real isolated Docker execution', () => {
-  beforeEach(() => { spawnMock.mockImplementation(actualProcess.spawn); });
+  beforeEach(() => { spawnMock.mockImplementation(actualProcess.spawn); vi.stubEnv('PYTHON_IMAGE_ID', qualifiedImageId); });
 
   it.each(listScenarios())('reference passes selected suites in Python 3.11: $id', async scenario => {
     const result = await executeScenario(scenario, scenario.referenceFiles, { includeProtected: true });

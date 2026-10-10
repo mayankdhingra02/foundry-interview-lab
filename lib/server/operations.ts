@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Pool } from 'pg';
 import { runnerHealth } from '../runtime/runner';
+import { configuredRuntimeBinding, DEFAULT_SCENARIO_IMAGE } from '../runtime/binding';
 import { authMode } from './config';
 
 type Query = Pick<Pool, 'query'>;
@@ -73,12 +74,11 @@ export async function operationalCounters(db: Query) {
 
 async function probeDocker(): Promise<boolean> {
   if (!runnerHealth().admitting) return false;
-  const image = process.env.PYTHON_IMAGE || 'python:3.11-slim';
-  const allowed = (process.env.RUNNER_ALLOWED_IMAGES || 'python:3.11-slim').split(',').map(value => value.trim());
-  if (!allowed.includes(image) || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,200}$/.test(image)) return false;
+  const binding = configuredRuntimeBinding({ runtime: { image: DEFAULT_SCENARIO_IMAGE,memoryMb: 128,timeoutSeconds: 30 } });
+  if (!binding) return false;
   const env: NodeJS.ProcessEnv = { NODE_ENV: 'production' };
   for (const name of ['PATH', 'HOME', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH', 'DOCKER_CONFIG', 'XDG_RUNTIME_DIR']) if (process.env[name]) env[name] = process.env[name];
-  try { const result = await exec('docker', ['image', 'inspect', image, '--format', '{{.Id}}'], { timeout: 5_000, maxBuffer: 4_000, env }); return /^sha256:[a-f0-9]{64}$/.test(result.stdout.trim()); }
+  try { const result = await exec('docker', ['image', 'inspect', binding.imageId, '--format', '{{.Id}}'], { timeout: 5_000, maxBuffer: 4_000, env }); return result.stdout.trim() === binding.imageId; }
   catch { return false; }
 }
 

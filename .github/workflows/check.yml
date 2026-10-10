@@ -54,6 +54,9 @@ jobs:
           }
           provision "$CI_PYTHON_IMAGE" python:3.11-slim
           provision "$CI_POSTGRES_IMAGE" postgres:16-alpine
+          image_id="$(docker image inspect --format '{{.Id}}' "$CI_PYTHON_IMAGE")"
+          [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "PYTHON_IMAGE_ID=$image_id" >> "$GITHUB_ENV"
       - run: FOUNDRY_DOCKER_INTEGRATION=1 npm test -- tests/runner.test.ts
       - run: RUN_POSTGRES_INTEGRATION=1 npm test -- tests/postgres.integration.test.ts tests/billing.integration.test.ts tests/voice-postgres.integration.test.ts tests/review-postgres.integration.test.ts tests/retention-postgres.integration.test.ts tests/deleted-requests.integration.test.ts
       - run: FOUNDRY_OPERATIONS_QUALIFICATION=1 node --conditions=react-server --import tsx scripts/operations/qualify.ts --output work/operations-qualification.json
@@ -85,6 +88,9 @@ jobs:
           if ! docker image inspect "$CI_PYTHON_IMAGE" > /dev/null 2>&1; then docker pull "$CI_PYTHON_IMAGE"; fi
           docker image tag "$CI_PYTHON_IMAGE" python:3.11-slim
           docker image inspect --format '{{json .RepoDigests}}' "$CI_PYTHON_IMAGE"
+          image_id="$(docker image inspect --format '{{.Id}}' "$CI_PYTHON_IMAGE")"
+          [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "PYTHON_IMAGE_ID=$image_id" >> "$GITHUB_ENV"
       - name: Configure synthetic local identity without printing its secret
         run: |
           mkdir -p work
@@ -121,6 +127,11 @@ jobs:
             if ! docker image inspect "$source" > /dev/null 2>&1; then docker pull "$source"; fi
             docker image inspect --format '{{json .RepoDigests}}' "$source"
           done
+          if ! docker image inspect "$CI_PYTHON_IMAGE" > /dev/null 2>&1; then docker pull "$CI_PYTHON_IMAGE"; fi
+          docker image tag "$CI_PYTHON_IMAGE" python:3.11-slim
+          image_id="$(docker image inspect --format '{{.Id}}' "$CI_PYTHON_IMAGE")"
+          [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "PYTHON_IMAGE_ID=$image_id" >> "$GITHUB_ENV"
       - run: docker build --build-arg NODE_IMAGE="$CI_NODE_IMAGE" --build-arg DOCKER_CLI_IMAGE="$CI_DOCKER_CLI_IMAGE" --target web --tag foundry-lab-ops-qualification:web .
       - run: docker build --build-arg NODE_IMAGE="$CI_NODE_IMAGE" --build-arg DOCKER_CLI_IMAGE="$CI_DOCKER_CLI_IMAGE" --target worker --tag foundry-lab-ops-qualification:worker .
       - run: FOUNDRY_CONTAINER_SMOKE=1 node --conditions=react-server --import tsx scripts/operations/container-smoke.ts

@@ -1,3 +1,4 @@
+import { fixtureRuntimeId } from './runtime-fixtures';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as content from '../lib/content/scenarios';
 import * as runtime from '../lib/runtime/runner';
@@ -69,7 +70,7 @@ describe('worker verifies admitted inputs before external work', () => {
     const { service, id } = await admitted('run');
     vi.spyOn(operations, 'executionAdmissionOpen').mockResolvedValue(true);
     vi.spyOn(runtime, 'runnerHealth').mockReturnValue({ configured: true, admitting: true, blockedReason: null });
-    const execute = vi.spyOn(runtime, 'executeScenario').mockResolvedValue({ status: 'completed', command: 'fixture', stdout: '', stderr: '', exitCode: 0, tests: [], durationMs: 1 });
+    const execute = vi.spyOn(runtime, 'executeScenario').mockResolvedValue({ runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'fixture', stdout: '', stderr: '', exitCode: 0, tests: [], durationMs: 1 });
     await processOneJob(service);
     expect(execute).toHaveBeenCalledOnce();
     expect((await service.getSession('owner', id)).jobs[0].state).toBe('completed');

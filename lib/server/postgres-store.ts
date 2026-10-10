@@ -242,6 +242,11 @@ export class PostgresPracticeStore implements PracticeStore {
       if (!uuid.test(session.id) || !uuid.test(session.ownerId)) throw new DomainError('invalid', 'PostgreSQL sessions require verified UUID account identities.');
       const old = before.sessions[session.id]; if (!old) continue;
       if (old.ownerId !== session.ownerId || old.scenarioDigest !== session.scenarioDigest) throw new DomainError('conflict', 'Session ownership and scenario identity cannot change.');
+      const jobs = new Map(session.jobs.map(job => [job.id,job]));
+      for (const previous of old.jobs) {
+        const current = jobs.get(previous.id);
+        if (!current || current.ownerId !== previous.ownerId || current.sessionId !== previous.sessionId || current.kind !== previous.kind || current.snapshotId !== previous.snapshotId || current.fingerprint !== previous.fingerprint || persistedCanonical(current.input) !== persistedCanonical(previous.input)) throw new DomainError('conflict', 'Admitted job inputs and immutable runtime bindings cannot change.');
+      }
       for (const field of ['snapshots', 'events', 'reports', 'turns', 'runs'] as const) {
         const entries = new Map(session[field].map(item => [item.id, item] as const));
         for (const previous of old[field]) if (!entries.has(previous.id) || canonical(entries.get(previous.id)) !== canonical(previous)) throw new DomainError('conflict', 'Acknowledged practice evidence cannot be rewritten.');
