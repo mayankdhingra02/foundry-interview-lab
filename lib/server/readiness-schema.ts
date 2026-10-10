@@ -38,7 +38,8 @@ const commerce: Record<string, Columns> = {
   practice_billing_actions: { user_id: 'uuid', request_id: 'text', operation: 'text', fingerprint: 'text', state: 'text', result: 'jsonb', created_at: 'timestamptz', expires_at: 'timestamptz' },
   practice_billing_webhook_events: { event_id: 'text', event_type: 'text', object_id: 'text', fingerprint: 'text', livemode: 'bool', event_created_at: 'timestamptz', received_at: 'timestamptz', next_attempt_at: 'timestamptz', state: 'text', attempt: 'int4', claim_token: 'uuid', lease_expires_at: 'timestamptz', completed_at: 'timestamptz', safe_error: 'text' },
 };
-export type ReadinessFeatures = { reviews?: boolean; voice?: boolean; billing?: boolean };
+const closing: Record<string, Columns> = { ai_practice_account_closings: entity({ opaque_owner_id: 'uuid', request_id: 'text', fingerprint: 'text', cleanup_id: 'uuid', created_at: 'timestamptz' }) };
+export type ReadinessFeatures = { reviews?: boolean; voice?: boolean; billing?: boolean; accountClosing?: boolean };
 export type SchemaCapability = {
   name: string; kind: string; rowSecurity: boolean; columns: Columns;
   checks: { name: string; definition: string; validated: boolean }[];
@@ -46,12 +47,12 @@ export type SchemaCapability = {
   anonymousSelect: boolean; authenticatedSelect: boolean; clientWrites: boolean;
   serviceAccess: boolean; currentAccess: boolean; serviceBypass: boolean; currentBypass: boolean;
 };
-const serverPrivate = new Set(['ai_practice_jobs', 'ai_practice_ai_calls', 'ai_practice_deletions', 'practice_worker_heartbeats', 'practice_operations_state', 'ai_practice_correction_drafts', 'ai_practice_correction_decisions', 'ai_practice_correction_publications', 'ai_practice_review_audits', 'practice_billing_webhook_events']);
+const serverPrivate = new Set(['ai_practice_jobs', 'ai_practice_ai_calls', 'ai_practice_deletions', 'practice_worker_heartbeats', 'practice_operations_state', 'ai_practice_correction_drafts', 'ai_practice_correction_decisions', 'ai_practice_correction_publications', 'ai_practice_review_audits', 'practice_billing_webhook_events', 'ai_practice_account_closings']);
 const immutable: Record<string, string> = {
   ai_practice_snapshots: 'ai_practice_snapshot_immutable', ai_practice_events: 'ai_practice_event_immutable', ai_practice_reports: 'ai_practice_report_immutable', ai_practice_evidence_manifests: 'ai_practice_manifest_immutable', ai_practice_turns: 'ai_practice_turn_immutable', ai_practice_runs: 'ai_practice_run_immutable',
   ai_practice_correction_drafts: 'ai_practice_correction_draft_immutable', ai_practice_correction_decisions: 'ai_practice_correction_decision_immutable', ai_practice_correction_publications: 'ai_practice_correction_publication_immutable', ai_practice_review_audits: 'ai_practice_review_audit_immutable',
 };
-export const readinessTableNames = [...Object.keys(baseline), ...Object.keys(reviews), ...Object.keys(commerce)];
+export const readinessTableNames = [...Object.keys(baseline), ...Object.keys(reviews), ...Object.keys(commerce), ...Object.keys(closing)];
 
 // Only catalogs are read. Role privilege functions include PUBLIC/inherited and
 // column-only grants, so revoking the table SELECT alone cannot hide an exposure.
@@ -62,8 +63,8 @@ export const readinessSchemaQuery = `select c.relname as name,c.relkind as kind,
   pg_catalog.has_any_column_privilege('anon',c.oid,'SELECT') as "anonymousSelect",
   pg_catalog.has_any_column_privilege('authenticated',c.oid,'SELECT') as "authenticatedSelect",
   (pg_catalog.has_table_privilege('anon',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') or pg_catalog.has_any_column_privilege('anon',c.oid,'INSERT,UPDATE,REFERENCES') or pg_catalog.has_table_privilege('authenticated',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') or pg_catalog.has_any_column_privilege('authenticated',c.oid,'INSERT,UPDATE,REFERENCES')) as "clientWrites",
-  (pg_catalog.has_table_privilege('service_role',c.oid,'SELECT') and pg_catalog.has_table_privilege('service_role',c.oid,'UPDATE') and (c.relname='practice_operations_state' or (pg_catalog.has_table_privilege('service_role',c.oid,'INSERT') and pg_catalog.has_table_privilege('service_role',c.oid,'DELETE')))) as "serviceAccess",
-  (pg_catalog.has_table_privilege(c.oid,'SELECT') and pg_catalog.has_table_privilege(c.oid,'UPDATE') and (c.relname='practice_operations_state' or (pg_catalog.has_table_privilege(c.oid,'INSERT') and pg_catalog.has_table_privilege(c.oid,'DELETE')))) as "currentAccess",
+  (pg_catalog.has_table_privilege('service_role',c.oid,'SELECT') and pg_catalog.has_table_privilege('service_role',c.oid,'UPDATE') and (c.relname='practice_operations_state' or (pg_catalog.has_table_privilege('service_role',c.oid,'INSERT') and (c.relname='ai_practice_account_closings' or pg_catalog.has_table_privilege('service_role',c.oid,'DELETE'))))) as "serviceAccess",
+  (pg_catalog.has_table_privilege(c.oid,'SELECT') and pg_catalog.has_table_privilege(c.oid,'UPDATE') and (c.relname='practice_operations_state' or (pg_catalog.has_table_privilege(c.oid,'INSERT') and (c.relname='ai_practice_account_closings' or pg_catalog.has_table_privilege(c.oid,'DELETE'))))) as "currentAccess",
   (select r.rolbypassrls or r.rolsuper from pg_catalog.pg_roles r where r.rolname='service_role') as "serviceBypass",
   (select r.rolbypassrls or r.rolsuper from pg_catalog.pg_roles r where r.rolname=current_user) as "currentBypass"
 from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1::text[])`;
@@ -83,12 +84,23 @@ export function schemaCapabilitiesReady(rows: SchemaCapability[], features: Read
   // adapter. A configured feature or a partially applied schema must be complete.
   if (features.reviews || Object.keys(reviews).some(name => byName.has(name))) Object.assign(required, reviews);
   if (features.billing || Object.keys(commerce).some(name => byName.has(name))) Object.assign(required, commerce);
+  const requireClosing = features.accountClosing || Object.keys(closing).some(name => byName.has(name));
+  if (requireClosing) Object.assign(required, closing);
   for (const [name, columns] of Object.entries(required)) {
     const row = byName.get(name);
     if (!row || row.kind !== 'r' || row.rowSecurity !== true || row.clientWrites !== false || row.serviceAccess !== true || row.currentAccess !== true || row.serviceBypass !== true || row.currentBypass !== true || Object.entries(columns).some(([column, type]) => row.columns?.[column] !== type)) return false;
     if ((name !== 'practice_scenario_versions' && row.anonymousSelect !== false) || (serverPrivate.has(name) && row.authenticatedSelect !== false)) return false;
     const trigger = immutable[name];
     if (trigger && !row.triggers?.some(item => item.name === trigger && item.schema === 'public' && item.procedure === 'ai_practice_reject_immutable_update' && ['O', 'A'].includes(item.enabled) && item.type === 19)) return false;
+  }
+  if (requireClosing) {
+    for (const [table, name, procedure, type] of [
+      ['ai_practice_account_closings', 'ai_practice_account_closing_guard', 'ai_practice_keep_account_closing', 31],
+      ['ai_practice_sessions', 'ai_practice_session_account_open', 'ai_practice_reject_closing_owner', 23],
+      ['ai_practice_jobs', 'ai_practice_job_account_open', 'ai_practice_reject_closing_owner', 23],
+      ['ai_practice_snapshots', 'ai_practice_snapshot_account_open', 'ai_practice_reject_closing_owner', 23],
+      ['ai_practice_artifacts', 'ai_practice_artifact_account_open', 'ai_practice_reject_closing_owner', 23],
+    ] as const) if (!byName.get(table)?.triggers?.some(item => item.name === name && item.procedure === procedure && item.schema === 'public' && ['O', 'A'].includes(item.enabled) && item.type === type)) return false;
   }
   const eventCheck = byName.get('ai_practice_events')?.checks?.find(check => check.name === 'ai_practice_events_event_type_check');
   if (!eventCheck?.validated || eventContract(eventCheck.definition) !== expectedEventContract) return false;

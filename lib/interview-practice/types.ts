@@ -77,4 +77,5 @@ export type CorrectionDecision = { id: string; ownerId: string; sessionId: strin
 export type CorrectionPublication = { id: string; ownerId: string; sessionId: string; caseId: string; draftId: string; reportId: string; generationId: string; publishedBy: string; createdAt: string };
 export type ReviewAudit = { id: string; actorId: string; ownerId?: string; sessionId?: string; caseId?: string; action: string; purpose: string; createdAt: string; targetId?: string };
 export type ReviewDatabase = { cases: Record<string, ReviewCase>; drafts: Record<string, CorrectionDraft>; decisions: Record<string, CorrectionDecision>; publications: Record<string, CorrectionPublication>; audits: ReviewAudit[] };
-export type PracticeDatabase = { schemaVersion: 1; sessions: Record<string, Session>; requests: Record<string, RequestRecord>; ledger: LedgerEntry[]; deletions: DeletionRecord[]; reviews?: ReviewDatabase };
+export type AccountClosing = { ownerId: string; requestId: string; fingerprint: string; cleanupId: string; createdAt: string };
+export type PracticeDatabase = { schemaVersion: 1; sessions: Record<string, Session>; requests: Record<string, RequestRecord>; ledger: LedgerEntry[]; deletions: DeletionRecord[]; reviews?: ReviewDatabase; accountClosings?: Record<string, AccountClosing> };

@@ -4,6 +4,7 @@ import type { PracticeStore } from './store';
 import { sessionView } from './session-service';
 import { admissionLimits, admissionLimitsFromEnvironment, assertMutationAdmission, assertMutationGrowth, captureMutationGrowth, mutationAdmissionMetadata, type AdmissionLimits } from '../interview-practice/admission';
 import { assertRequestNotErased } from './deleted-requests';
+import { assertAccountOpen } from '../interview-practice/account-closing';
 
 export type InteractionAction = 'working' | 'repeat' | 'clarify';
 export type ClarificationTopic = 'requirements' | 'assistance' | 'timing';
@@ -23,6 +24,7 @@ export class InteractionService {
     const topic = input.action === 'clarify' ? input.topic ?? 'requirements' : undefined;
     const fingerprint = digest({ operation: 'interview-interaction', sessionId, action: input.action, topic: topic ?? null });
     return this.store.transaction(db => {
+      assertAccountOpen(db, ownerId);
       const key = requestKey(ownerId, input.requestId), prior = db.requests[key];
       if (prior) {
         if (prior.fingerprint !== fingerprint) throw new DomainError('conflict', 'This request key was already used for different input.');

@@ -13,11 +13,13 @@ import { admittedRunSuite, selectRunSuite } from '../interview-practice/learner-
 import { MAX_ADVISORY_MINUTES, practiceConditionsSchema, setupExtraMinutes } from '../interview-practice/timing';
 import { compatibleInferenceBinding, configuredInferenceBinding, parseInferenceBinding, validateInferenceCompletion, validateInferenceRecord, type InferenceBinding } from '../ai/binding';
 import type { AiRole } from '../ai/policy';
+import { accountClosing, assertAccountOpen } from '../interview-practice/account-closing';
 
 export type SessionAdmissionContext = { ownerId: string; sessionId: string; scenarioId: string; scenarioVersion: string; requestId: string; now: string; database: PracticeDatabase };
 export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void>; admissionLimits?: Partial<AdmissionLimits>; runtimeBinding?: (scenario: Scenario) => RuntimeBinding | null; inferenceBinding?: (role: AiRole) => InferenceBinding | null };
 export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; voice?: boolean; accommodations?: string[]; practiceConditions?: SessionConfiguration['practiceConditions'] };
 export type SessionMutationResult = { session: SessionView; job?: JobView; hint?: string };
+export type AccountClosingResult = { closed: true; scope: 'permanent-account-closing'; cleanupId: string; cleanupState: 'pending' | 'completed' };
 export type TrustedSupportGuard = (database: PracticeDatabase, now: string) => void;
 /** Trusted, synchronous decision captured before entering the store transaction. */
 export type FreshWorkGuard = () => void;
@@ -62,6 +64,7 @@ export class SessionService {
     assertRequestId(requestId);
     const fingerprint = digest({ operation, payload, sessionId: sessionId ?? null });
     return this.store.transaction(async db => {
+      assertAccountOpen(db, ownerId);
       const key = requestKey(ownerId, requestId), existing = db.requests[key];
       if (existing) {
         if (existing.fingerprint !== fingerprint) throw new DomainError('conflict', 'This request key was already used for different input.');
@@ -184,10 +187,11 @@ export class SessionService {
       return result;
     });
   }
-  async listSessions(ownerId: string) { return Object.values((await this.store.read()).sessions).filter(s => s.ownerId === ownerId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(sessionView); }
-  async getSession(ownerId: string, id: string) { return sessionView(ownedSession((await this.store.read()).sessions, ownerId, id)); }
-  async exportSession(ownerId: string, id: string) { return structuredClone(ownedSession((await this.store.read()).sessions, ownerId, id)); }
-  async exportAccount(ownerId: string) { return Object.values((await this.store.read()).sessions).filter(s => s.ownerId === ownerId); }
+  private async ownerDatabase(ownerId: string) { const db = await this.store.read(); assertAccountOpen(db, ownerId); return db; }
+  async listSessions(ownerId: string) { return Object.values((await this.ownerDatabase(ownerId)).sessions).filter(s => s.ownerId === ownerId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(sessionView); }
+  async getSession(ownerId: string, id: string) { return sessionView(ownedSession((await this.ownerDatabase(ownerId)).sessions, ownerId, id)); }
+  async exportSession(ownerId: string, id: string) { return structuredClone(ownedSession((await this.ownerDatabase(ownerId)).sessions, ownerId, id)); }
+  async exportAccount(ownerId: string) { return Object.values((await this.ownerDatabase(ownerId)).sessions).filter(s => s.ownerId === ownerId); }
   async events(ownerId: string, id: string, after = 0) {
     if (!Number.isInteger(after) || after < 0) throw new DomainError('invalid', 'Invalid replay sequence.');
     return (await this.exportSession(ownerId, id)).events.filter(e => e.sequence > after);
@@ -345,7 +349,7 @@ export class SessionService {
     });
   }
   async getJob(ownerId: string, jobId: string) {
-    const job = Object.values((await this.store.read()).sessions).filter(s => s.ownerId === ownerId).flatMap(s => s.jobs).find(j => j.id === jobId);
+    const job = Object.values((await this.ownerDatabase(ownerId)).sessions).filter(s => s.ownerId === ownerId).flatMap(s => s.jobs).find(j => j.id === jobId);
     if (!job) throw new DomainError('not_found', 'Job not found.'); return publicJob(job);
   }
   async claimJob(workerId: string, kinds?: JobKind[]): Promise<JobClaim | null> {
@@ -353,6 +357,7 @@ export class SessionService {
     return this.store.transaction(db => {
       const now = this.at();
       for (const session of Object.values(db.sessions)) for (const job of session.jobs) {
+        if (accountClosing(db, session.ownerId)) continue;
         if (kinds && !kinds.includes(job.kind)) continue;
         const expired = job.state === 'running' && job.leaseExpiresAt !== null && job.leaseExpiresAt <= now;
         if (job.state !== 'queued' && !expired) continue;
@@ -386,7 +391,7 @@ export class SessionService {
   }
   private locateClaim(db: PracticeDatabase, claim: JobClaim, now: string) {
     const session = db.sessions[claim.job.sessionId], job = session?.jobs.find(j => j.id === claim.job.id);
-    if (!session || !job || job.state !== 'running' || job.claimToken !== claim.claimToken || job.fencingToken !== claim.fencingToken || job.workerId !== claim.workerId || !job.leaseExpiresAt || job.leaseExpiresAt <= now || job.cancellationRequested) return null;
+    if (!session || accountClosing(db, session.ownerId) || !job || job.state !== 'running' || job.claimToken !== claim.claimToken || job.fencingToken !== claim.fencingToken || job.workerId !== claim.workerId || !job.leaseExpiresAt || job.leaseExpiresAt <= now || job.cancellationRequested) return null;
     return { session, job };
   }
   async heartbeatJob(claim: JobClaim) {
@@ -538,6 +543,37 @@ export class SessionService {
       // This operation erases Lab content, while preserving the shared account.
       // Content-free quota postings must survive so deletion cannot reset provider-spend caps.
       return { deleted: true as const };
+    });
+  }
+  /** Trusted host lifecycle primitive. Does not delete Auth, invoke providers or reopen on failure. */
+  async closeAccount(ownerId: string, input: { requestId: string }): Promise<AccountClosingResult> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(ownerId)) throw new DomainError('invalid', 'Permanent account closing requires a verified UUID owner.');
+    // PostgreSQL UUID keys are canonical lowercase; use that same identity for
+    // ownership lookup, erasure and the typed payload before touching storage.
+    ownerId = ownerId.toLowerCase();
+    assertRequestId(input.requestId);
+    return this.store.transaction(async db => {
+      const existing = accountClosing(db, ownerId);
+      const result = (cleanupId: string): AccountClosingResult => {
+        const cleanup = db.deletions.find(item => item.id === cleanupId && item.ownerId === ownerId);
+        if (!cleanup) throw new DomainError('unavailable', 'Account cleanup inventory could not be verified. The account remains closed.');
+        return { closed: true, scope: 'permanent-account-closing', cleanupId, cleanupState: cleanup.state };
+      };
+      if (existing) return result(existing.cleanupId);
+      if (db.accountClosings === undefined && !this.store.supportsAccountClosing) throw new DomainError('unavailable', 'Permanent account closing requires its database migration. No content was erased.');
+      if (db.requests[requestKey(ownerId, input.requestId)]) throw new DomainError('conflict', 'This request key was already used for a different operation.');
+      assertRequestNotErased(db, ownerId, input.requestId, digest({ operation: 'permanent-account-closing', ownerId }));
+      const now = this.at(), cleanupId = randomUUID();
+      const objectKeys = await this.store.captureOwnerObjectKeys?.(ownerId) ?? [];
+      db.accountClosings ??= {};
+      db.accountClosings[ownerId] = { ownerId, requestId: input.requestId, fingerprint: digest({ operation: 'permanent-account-closing', ownerId }), cleanupId, createdAt: now };
+      // Fence, object inventory, cancellation settlements and erasure commit together.
+      db.deletions.push({ id: cleanupId, ownerId, sessionId: cleanupId, createdAt: now, state: objectKeys.length ? 'pending' : 'completed', objectKeys, ...(objectKeys.length ? {} : { completedAt: now }) });
+      for (const session of Object.values(db.sessions).filter(item => item.ownerId.toLowerCase() === ownerId)) this.removeSession(db, session.ownerId, session.id, now);
+      const remaining = Object.values(db.requests).filter(request => request.ownerId.toLowerCase() === ownerId);
+      if (remaining.length) rememberErasedRequests(db, ownerId, randomUUID(), remaining, now);
+      for (const [key, request] of Object.entries(db.requests)) if (request.ownerId.toLowerCase() === ownerId) delete db.requests[key];
+      return result(cleanupId);
     });
   }
 }

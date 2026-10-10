@@ -10,6 +10,13 @@ const exec = promisify(execFile);
 export type DisposableDatabase = { container: string; admin: Pool; service: Pool; migrationVersions: string[]; restoreAndVerify: () => Promise<{ durationMs: number; matchingSessions: boolean; matchingSnapshots: boolean }> };
 const docker = (args: string[], maxBuffer = 64_000) => exec('docker', args, { timeout: 30_000, maxBuffer, encoding: 'utf8' });
 
+/** Independent max-one contender for this fixture's service pool; never reads
+ * DATABASE_URL. pg-pool hides password from enumeration, so a spread alone
+ * silently drops the disposable credential. Do not log these options. */
+export function disposableServiceContender(source: Pool, applicationName: string): Pool {
+  return new Pool({ ...source.options, password: source.options.password, max: 1, application_name: applicationName });
+}
+
 function restoreInput(container: string, dump: Buffer): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('docker', ['exec', '-i', container, 'pg_restore', '-U', 'postgres', '-d', 'foundry_restored', '--no-owner', '--exit-on-error'], { stdio: ['pipe', 'ignore', 'pipe'], shell: false });

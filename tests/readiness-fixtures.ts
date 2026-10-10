@@ -5,7 +5,7 @@ const directory = new URL('../supabase/migrations/', import.meta.url);
 const orderedMigrations = readdirSync(directory).filter(name => name.endsWith('.sql')).sort().map(name => readFileSync(new URL(name, directory), 'utf8'));
 const migrations = orderedMigrations.join('\n');
 const types: Record<string, string> = { uuid: 'uuid', text: 'text', jsonb: 'jsonb', timestamptz: 'timestamptz', bigint: 'int8', integer: 'int4', boolean: 'bool' };
-const privateTables = new Set(['ai_practice_jobs','ai_practice_ai_calls','ai_practice_deletions','practice_worker_heartbeats','practice_operations_state','ai_practice_correction_drafts','ai_practice_correction_decisions','ai_practice_correction_publications','ai_practice_review_audits','practice_billing_webhook_events']);
+const privateTables = new Set(['ai_practice_jobs','ai_practice_ai_calls','ai_practice_deletions','practice_worker_heartbeats','practice_operations_state','ai_practice_correction_drafts','ai_practice_correction_decisions','ai_practice_correction_publications','ai_practice_review_audits','practice_billing_webhook_events','ai_practice_account_closings']);
 
 /** Catalog fixture from migration column/trigger declarations, never learner data.
  * This parser is not a SQL engine; the opt-in suite verifies actual catalogs. */
@@ -21,6 +21,7 @@ export function readySchema(): SchemaCapability[] {
   for (const target of payloadTargets.matchAll(/'([^']+)'/g)) rows.get(target[1])!.columns.runtime_payload = 'jsonb';
   for (const column of runtimeMigration.matchAll(/alter table public\.([a-z_]+) add column ([a-z_]+) (integer|bigint)/g)) rows.get(column[1])!.columns[column[2]] = types[column[3]];
   for (const trigger of migrations.matchAll(/create trigger ([a-z_]+) before update on public\.([a-z_]+) for each row execute function public\.([a-z_]+)\(\)/g)) rows.get(trigger[2])!.triggers.push({ name: trigger[1], procedure: trigger[3], schema: 'public', enabled: 'O', type: 19 });
+  for (const trigger of migrations.matchAll(/create trigger ([a-z_]+) before insert or update( or delete)? on public\.([a-z_]+) for each row execute function public\.([a-z_]+)\(\)/g)) rows.get(trigger[3])!.triggers.push({ name: trigger[1], procedure: trigger[4], schema: 'public', enabled: 'O', type: trigger[2] ? 31 : 23 });
   const eventMigration = orderedMigrations.filter(sql => /add constraint ai_practice_events_event_type_check/i.test(sql)).at(-1)!;
   const allowlist = eventMigration.match(/event_type in \(([\s\S]*?)\)/)![1];
   const values = [...allowlist.matchAll(/'([a-z][a-z.-]+)'/g)].map(match => `'${match[1]}'::text`);

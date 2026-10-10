@@ -9,6 +9,7 @@ import { SessionService, sessionView, type TrustedSupportGuard } from './session
 import type { PracticeStore } from './store';
 import { admissionLimits, admissionLimitsFromEnvironment, assertMutationAdmission, assertMutationGrowth, captureMutationGrowth, mutationAdmissionMetadata, type AdmissionLimits, type MutationLane } from '../interview-practice/admission';
 import { assertRequestNotErased } from './deleted-requests';
+import { assertAccountOpen } from '../interview-practice/account-closing';
 
 export type ReviewActor = Pick<Actor, 'id' | 'local'>;
 export type CreateReviewInput = { requestId: string; category: 'feedback' | 'technical'; reportId?: string; message: string; criterionIds?: string[]; inspectionConsent: boolean; supportActionsConsent: boolean };
@@ -36,14 +37,18 @@ export class ReviewService {
   private reviewCase(db: PracticeDatabase, id: string) {
     const item = data(db).cases[id];
     if (!item || !db.sessions[item.sessionId] || db.sessions[item.sessionId].ownerId !== item.ownerId) throw new DomainError('not_found', 'Support reference not found.');
+    assertAccountOpen(db, item.ownerId);
     return item;
   }
   private consent(item: ReviewCase, now: string, actions = false) { if (!activeConsent(item, now, actions)) throw new HttpError(403, 'support_consent_required', actions ? 'Current learner permission for support actions is required.' : 'Current learner permission to inspect attempt contents is required.'); }
   private audit(db: PracticeDatabase, actorId: string, action: string, purpose: string, now: string, item?: ReviewCase, targetId?: string) {
+    assertAccountOpen(db, actorId);
     const audit = { id: randomUUID(), actorId, action, purpose, createdAt: now, ...(item ? { ownerId: item.ownerId, sessionId: item.sessionId, caseId: item.id } : {}), ...(targetId ? { targetId } : {}) };
     data(db).audits.push(audit); return audit.id;
   }
   private once(db: PracticeDatabase, ownerId: string, actorId: string, requestId: string, operation: string, payload: unknown, sessionId: string | undefined, apply: () => string, learnerLane?: MutationLane) {
+    assertAccountOpen(db, ownerId);
+    assertAccountOpen(db, actorId);
     assertRequestId(requestId);
     const id = `review_${digest({ actorId, requestId })}`, key = requestKey(ownerId, id), fingerprint = digest({ operation, payload, sessionId: sessionId ?? null });
     const existing = db.requests[key];
@@ -60,6 +65,7 @@ export class ReviewService {
   async createCase(ownerId: string, sessionId: string, input: CreateReviewInput) {
     const message = boundedText(input.message, 'Support message', 4000);
     return this.store.transaction(db => {
+      assertAccountOpen(db, ownerId);
       const session = ownedSession(db.sessions, ownerId, sessionId), now = this.at(), reviews = data(db);
       if (!['feedback','technical'].includes(input.category) || typeof input.inspectionConsent !== 'boolean' || typeof input.supportActionsConsent !== 'boolean') throw new DomainError('invalid', 'Select a support category and explicit permission choices.');
       const report = session.reports.find(report => report.id === input.reportId);
