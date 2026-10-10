@@ -1,15 +1,17 @@
 # Operators provision/pin reviewed base images before a deployment build.
-FROM node:24-bookworm-slim AS dependencies
+ARG NODE_IMAGE=node:24-bookworm-slim
+ARG DOCKER_CLI_IMAGE=docker:29-cli
+FROM ${NODE_IMAGE} AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:24-bookworm-slim AS production-dependencies
+FROM ${NODE_IMAGE} AS production-dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-FROM node:24-bookworm-slim AS builder
+FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ARG NEXT_PUBLIC_SUPABASE_URL
@@ -22,7 +24,7 @@ RUN mkdir -p public && npm run build
 # Runtime config is JavaScript so Next never tries to install a TypeScript compiler.
 RUN node -e "const fs=require('fs'),ts=require('typescript'); fs.writeFileSync('next.config.js',ts.transpileModule(fs.readFileSync('next.config.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText)"
 
-FROM node:24-bookworm-slim AS application
+FROM ${NODE_IMAGE} AS application
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 COPY --from=builder --chown=node:node /app/package.json /app/package-lock.json /app/next.config.js /app/tsconfig.json ./
@@ -35,7 +37,7 @@ COPY --from=builder --chown=node:node /app/lib ./lib
 COPY --from=builder --chown=node:node /app/scripts ./scripts
 USER node
 
-FROM docker:29-cli AS docker-cli
+FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 FROM application AS worker
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 CMD ["node", "--conditions=react-server", "--import", "tsx", "scripts/worker.ts"]
