@@ -8,6 +8,7 @@ import { handle, HttpError, privateJson, readJson } from './http';
 import { kickLocalWorker } from './worker';
 import { exportPracticeSession } from './export';
 import { streamEvents } from './event-stream';
+import { handleVoiceRequest } from '../voice/api';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
@@ -55,6 +56,7 @@ export async function practiceApi(request: Request, path: string[]) {
       return privateJson({ session, scenario: session.scenario, capabilities: capabilities() });
     }
     if (path.length === 2 && method === 'DELETE') return privateJson(await service.deleteSession(actor.id, id, parsed(key, await readJson(request, 2000))));
+    if (operation === 'voice' && path.length === 4 && ['transcribe', 'speak'].includes(path[3])) return handleVoiceRequest(request, actor.id, id, path[3] as 'transcribe' | 'speak');
     if (path.length !== 3) throw new HttpError(404, 'not_found', 'Endpoint not found.');
     if (operation === 'events' && method === 'GET') {
       const after = Number(new URL(request.url).searchParams.get('after') || request.headers.get('last-event-id') || 0);

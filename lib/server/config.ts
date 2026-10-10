@@ -1,6 +1,7 @@
 import { runnerHealth } from '../runtime/runner';
 import { modelPolicy } from '../ai/policy';
 import { billingConfigured } from '../billing/config';
+import { voiceAvailability } from '../voice/config';
 
 export function enabled(name: string, fallback = false): boolean {
   const value = process.env[name];
@@ -22,7 +23,7 @@ export function capabilities() {
   const runner = enabled('FEATURE_EXECUTION', true) && health.configured && health.admitting;
   return {
     ai, interviewer: ai, assistant: ai, runner, accounts: authMode() === 'supabase',
-    voice: enabled('FEATURE_VOICE') && Boolean(process.env.DEEPGRAM_API_KEY),
+    voice: voiceAvailability(),
     billing: billingConfigured(),
     authMode: authMode(),
     details: {

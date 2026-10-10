@@ -45,7 +45,7 @@ export type JobResult = (
   | { kind: 'assistant'; message: string; files?: Record<string, string>; model: string; actualUsd?: number }
   | { kind: 'coach'; report: CoachOutput; model: string; promptVersion: string; actualUsd?: number }) & { inference?: InferenceRecord };
 export type Mutation = { requestId: string; expectedRevision: number };
-export type UsageSummary = { reservedUsd: number; spentUsd: number; uncertainUsd: number; runs: number; aiCalls: number };
+export type UsageSummary = { reservedUsd: number; spentUsd: number; uncertainUsd: number; runs: number; aiCalls: number; voiceAllocatedSeconds?: number };
 export type Session = {
   id: string; ownerId: string; scenarioId: string; scenarioVersion: string; scenarioDigest: string;
   scenario: PublicScenario; mode: PracticeMode; configuration: SessionConfiguration; lifecycle: Lifecycle;
