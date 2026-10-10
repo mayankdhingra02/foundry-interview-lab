@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { fixtureRuntimeId } from './runtime-fixtures';
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
@@ -50,19 +51,19 @@ async function fixture(reviews = false, rich = false) {
     const mutation = async () => ({ requestId: requestId(), expectedRevision: (await context.practice.getSession(owner,created.id)).revision });
     await context.practice.requestAssistant(owner,created.id,{ ...await mutation(),mode: 'edit',message: 'Synthetic proposed edit.' });
     const edit = (await context.practice.claimJob('fixture-worker'))!;
-    await context.practice.completeJob(edit,{ kind: 'assistant',model: 'synthetic-fixture',message: 'Synthetic edit.',files: { 'main.py': 'SYNTHETIC-FIXTURE-CODE' },actualUsd: 0 });
+    await completeFixtureJob(context.practice, edit,{ kind: 'assistant',model: 'synthetic-fixture',message: 'Synthetic edit.',files: { 'main.py': 'SYNTHETIC-FIXTURE-CODE' },actualUsd: 0 });
     const proposal = (await context.practice.getSession(owner,created.id)).editProposals[0];
     await context.practice.decideEdit(owner,created.id,{ ...await mutation(),proposalId: proposal.id,decision: 'accept' });
     for (let index = 0; index < 2; index++) {
       await context.practice.requestRun(owner,created.id,await mutation()); const run = (await context.practice.claimJob('fixture-worker'))!;
-      await context.practice.completeJob(run,{ kind: 'run',run: { runtimeDigest: fixtureRuntimeId, status: 'completed',command: 'Synthetic fixture',stdout: '',stderr: '',exitCode: 1,durationMs: 1,tests: [{ id: 'smoke',title: 'Smoke',status: 'failed' }] } });
+      await completeFixtureJob(context.practice, run,{ kind: 'run',run: { runtimeDigest: fixtureRuntimeId, status: 'completed',command: 'Synthetic fixture',stdout: '',stderr: '',exitCode: 1,durationMs: 1,tests: [{ id: 'smoke',title: 'Smoke',status: 'failed' }] } });
     }
     await context.practice.command(owner,created.id,{ ...await mutation(),action: 'finish' }); const question = (await context.practice.claimJob('fixture-worker'))!;
-    await context.practice.completeJob(question,{ kind: 'interviewer',model: 'authored',actualUsd: 0,proposal: { action: 'ask_probe',question: 'What did you check?',competencyId: 'correctness',evidenceIds: [],probeId: 'p1' } });
+    await completeFixtureJob(context.practice, question,{ kind: 'interviewer',model: 'authored',actualUsd: 0,proposal: { action: 'ask_probe',question: 'What did you check?',competencyId: 'correctness',evidenceIds: [],probeId: 'p1' } });
     await context.practice.commitTurn(owner,created.id,{ ...await mutation(),text: 'The synthetic check failed.' }); const end = (await context.practice.claimJob('fixture-worker'))!;
-    await context.practice.completeJob(end,{ kind: 'interviewer',model: 'authored',actualUsd: 0,proposal: { action: 'end_debrief',evidenceIds: [] } });
+    await completeFixtureJob(context.practice, end,{ kind: 'interviewer',model: 'authored',actualUsd: 0,proposal: { action: 'end_debrief',evidenceIds: [] } });
     await context.practice.command(owner,created.id,{ ...await mutation(),action: 'submit' }); const coach = (await context.practice.claimJob('fixture-worker'))!;
-    await context.practice.completeJob(coach,{ kind: 'coach',model: 'synthetic-fixture',promptVersion: 'fixture-v1',actualUsd: 0,report: await correction(context,created.id) });
+    await completeFixtureJob(context.practice, coach,{ kind: 'coach',model: 'synthetic-fixture',promptVersion: 'fixture-v1',actualUsd: 0,report: await correction(context,created.id) });
     const item = await openCase(context,created.id), report = (await context.practice.getSession(owner,created.id)).reports[0];
     const draft = await context.reviews.createDraft(author,item.id,{ requestId: requestId(),sourceReportId: report.id,reason: 'Synthetic reviewed correction.',report: await correction(context,created.id) });
     await context.reviews.reviewDraft(reviewer,draft.id,{ requestId: requestId(),decision: 'approve',note: 'Synthetic review.' });

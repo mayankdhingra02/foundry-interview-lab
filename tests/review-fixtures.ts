@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { fixtureRuntimeId } from './runtime-fixtures';
 import { randomUUID } from 'node:crypto';
 import type { CoachOutput, Scenario } from '../lib/interview-practice/types';
@@ -17,7 +18,7 @@ export async function finalAttempt(context: ReturnType<typeof harness>, failCoac
   const { practice } = context;
   let session = (await practice.createSession(owner, { scenarioId: scenario.id, requestId: requestId() })).session;
   await practice.requestRun(owner, session.id, { requestId: requestId(), expectedRevision: session.revision }); const run = await practice.claimJob('fixture-worker');
-  await practice.completeJob(run!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 1, durationMs: 1, tests: [{ id: 'smoke', title: 'Smoke', status: 'failed' }] } });
+  await completeFixtureJob(practice, run!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 1, durationMs: 1, tests: [{ id: 'smoke', title: 'Smoke', status: 'failed' }] } });
   session = await practice.getSession(owner, session.id);
   const finish = await practice.command(owner, session.id, { requestId: requestId(), expectedRevision: session.revision, action: 'finish' });
   await practice.cancelJob(owner, finish.job!.id, { requestId: requestId() }); session = await practice.getSession(owner, session.id);
@@ -25,7 +26,7 @@ export async function finalAttempt(context: ReturnType<typeof harness>, failCoac
   if (failCoach) await practice.failJob(coach!, 'PRIVATE-PROVIDER-ERROR-FIXTURE', 0);
   else {
     const frozen = (await practice.exportSession(owner, session.id)).frozenEvidence!;
-    await practice.completeJob(coach!, { kind: 'coach', model: 'synthetic-fixture', promptVersion: 'fixture-v1', actualUsd: 0, report: { overview: 'PRIVATE-ORIGINAL-REPORT', rubric: [{ criterionId: 'correctness', level: 'Developing', feedback: 'The recorded check failed.', evidenceIds: [frozen.items.find(item => item.kind === 'test')!.id], confidence: 'low' }], nextPractice: [{ drillId: 'drill', reason: 'Check a boundary.' }] } });
+    await completeFixtureJob(practice, coach!, { kind: 'coach', model: 'synthetic-fixture', promptVersion: 'fixture-v1', actualUsd: 0, report: { overview: 'PRIVATE-ORIGINAL-REPORT', rubric: [{ criterionId: 'correctness', level: 'Developing', feedback: 'The recorded check failed.', evidenceIds: [frozen.items.find(item => item.kind === 'test')!.id], confidence: 'low' }], nextPractice: [{ drillId: 'drill', reason: 'Check a boundary.' }] } });
   }
   return practice.getSession(owner, session.id);
 }

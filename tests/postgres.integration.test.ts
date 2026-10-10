@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { fixtureRuntimeId } from './runtime-fixtures';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -8,6 +9,8 @@ import { Pool } from 'pg';
 import { PostgresPracticeStore } from '../lib/server/postgres-store';
 import { SessionService } from '../lib/server/session-service';
 import type { CoachOutput, LedgerEntry, Scenario } from '../lib/interview-practice/types';
+import { inferenceBindingFromPolicy, parseInferenceBinding } from '../lib/ai/binding';
+import { digest } from '../lib/interview-practice/domain';
 
 // Explicit opt-in: never uses DATABASE_URL or any hosted account. No existing database/container is modified.
 const enabled = process.env.RUN_POSTGRES_INTEGRATION === '1';
@@ -95,10 +98,27 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     const claim = (await second.claimJob('pinned-worker'))!;
     const before = await store.read();
     const run = { status: 'completed' as const,command: 'synthetic SQL fixture',stdout: '',stderr: '',exitCode: 0,tests: [],durationMs: 1 };
-    await expect(second.completeJob(claim,{ kind: 'run',run: { ...run,runtimeDigest: `sha256:${'c'.repeat(64)}` } })).rejects.toMatchObject({ code: 'invalid' });
+    await expect(completeFixtureJob(second, claim,{ kind: 'run',run: { ...run,runtimeDigest: `sha256:${'c'.repeat(64)}` } })).rejects.toMatchObject({ code: 'invalid' });
     expect(await store.read()).toEqual(before);
-    await expect(second.completeJob(claim,{ kind: 'run',run: { ...run,runtimeDigest: fixtureRuntimeId } })).resolves.toBe(true);
+    await expect(completeFixtureJob(second, claim,{ kind: 'run',run: { ...run,runtimeDigest: fixtureRuntimeId } })).resolves.toBe(true);
     expect((await service.getSession(ownerA,session.id)).runs[0].runtimeDigest).toBe(fixtureRuntimeId);
+  });
+  it('roundtrips immutable admitted inference and provenance across adapters without adopting new configuration', async () => {
+    const session = await create(), request = { ...mut(session.revision), mode: 'ask' as const, message: 'Synthetic bounded assistance.' };
+    const admitted = await service.requestAssistant(ownerA, session.id, request), original = await service.exportSession(ownerA, session.id);
+    const binding = parseInferenceBinding(original.jobs[0].input.inferenceBinding)!; expect(binding).not.toBeNull(); expect(original.jobs[0].reservedUsd).toBe(binding.reserveUsd);
+    const second = new SessionService(new PostgresPracticeStore(servicePool), () => fixture, { inferenceBinding: role => inferenceBindingFromPolicy(role, { model: 'replacement-synthetic-model', inputRate: 10, outputRate: 20, maxOutput: 3200 }) });
+    expect(await second.requestAssistant(ownerA, session.id, request)).toEqual(admitted);
+    expect((await second.exportSession(ownerA, session.id)).jobs[0].input).toEqual(original.jobs[0].input);
+    await expect(store.transaction(db => {
+      const job = db.sessions[session.id].jobs[0]; (job.input.inferenceBinding as Record<string, unknown>).model = 'rebound-model'; job.fingerprint = digest(job.input);
+    })).rejects.toMatchObject({ code: 'conflict' });
+    expect(await service.exportSession(ownerA, session.id)).toEqual(original);
+    const claim = (await second.claimJob('inference-roundtrip-worker'))!;
+    expect(await completeFixtureJob(second, claim, { kind: 'assistant', model: 'synthetic-fixture', message: 'A synthetic recorded answer.', actualUsd: 0 })).toBe(true);
+    const saved = await service.exportSession(ownerA, session.id), record = saved.jobs[0].inference;
+    expect(record).toMatchObject({ provider: binding.provider, requestedModel: binding.model, role: binding.role, promptVersion: binding.promptVersion, schemaVersion: binding.schemaVersion, contextVersion: binding.contextVersion, validated: true });
+    expect((await service.getSession(ownerA, session.id)).jobs[0]).not.toHaveProperty('input');
   });
   it('fails closed on real per-table capacity overflow without truncating acknowledged evidence', async () => {
     const session = await create();
@@ -165,7 +185,7 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
       finally { await client.query('rollback'); client.release(); }
     }
     expect((await servicePool.query('select count(*)::int as count from public.ai_practice_ai_calls')).rows[0].count).toBe(0);
-    expect(await service.completeJob(claim, { kind: 'assistant', model: 'synthetic-fixture', message: 'A synthetic answer.', actualUsd: 0 })).toBe(true);
+    expect(await completeFixtureJob(service, claim, { kind: 'assistant', model: 'synthetic-fixture', message: 'A synthetic answer.', actualUsd: 0 })).toBe(true);
   });
   it('enforces actual SQL RLS, anonymous denial and composite owner relationships', async () => {
     const a = await create(ownerA); await create(ownerB);
@@ -203,15 +223,15 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     await original.requestAssistant(ownerA, session.id, { ...mut(session.revision), mode: 'ask', message: 'Explain the code' });
     const first = await original.claimJob('first-worker'); now = new Date(now.getTime() + 1100);
     const restarted = new SessionService(new PostgresPracticeStore(servicePool), () => fixture, { now: () => now, leaseMs: 1000 }), second = await restarted.claimJob('second-worker');
-    expect(await restarted.completeJob(first!, { kind: 'assistant', model: 'test-fixture', message: 'stale', actualUsd: 0 })).toBe(false);
-    expect(await restarted.completeJob(second!, { kind: 'assistant', model: 'test-fixture', message: 'Current answer', actualUsd: 0.01 })).toBe(true);
+    expect(await completeFixtureJob(restarted, first!, { kind: 'assistant', model: 'test-fixture', message: 'stale', actualUsd: 0 })).toBe(false);
+    expect(await completeFixtureJob(restarted, second!, { kind: 'assistant', model: 'test-fixture', message: 'Current answer', actualUsd: 0.01 })).toBe(true);
     expect((await restarted.getSession(ownerA, session.id)).usage.uncertainUsd).toBeCloseTo(0.08);
     const job = (await pool.query('select state,fencing_token from public.ai_practice_jobs')).rows[0]; expect(job.state).toBe('completed'); expect(Number(job.fencing_token)).toBe(2);
   });
   it('stores assistant proposals and accepted edits in normalized owner rows', async () => {
     let session = await create();
     await service.requestAssistant(ownerA, session.id, { ...mut(session.revision), mode: 'edit', message: 'Propose a fix' }); const claim = await service.claimJob('worker');
-    await service.completeJob(claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Inspect this proposed fix.', files: { 'service.py': 'def add(a,b): return a+b\n' }, actualUsd: 0 });
+    await completeFixtureJob(service, claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Inspect this proposed fix.', files: { 'service.py': 'def add(a,b): return a+b\n' }, actualUsd: 0 });
     session = await service.getSession(ownerA, session.id);
     await service.decideEdit(ownerA, session.id, { ...mut(session.revision), proposalId: session.editProposals[0].id, decision: 'accept' });
     const reloaded = await new SessionService(new PostgresPracticeStore(servicePool), () => fixture).getSession(ownerA, session.id);
@@ -227,7 +247,7 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     const first = await service.claimJob('worker'); await service.failJob(first!, 'Synthetic provider interruption', 0);
     const retry = await service.retryReport(ownerA, session.id, { requestId: req() }); expect(retry.job!.id).toBe(first!.job.id);
     const claimed = await service.claimJob('worker-2'); expect(claimed!.job.input).toEqual(first!.job.input);
-    await service.completeJob(claimed!, { kind: 'coach', actualUsd: 0, model: 'synthetic-fixture', promptVersion: 'fixture-v1', report: { overview: 'No final test observation was recorded.', rubric: [{ criterionId: 'correctness', level: 'Not observed', feedback: 'Run a small example next time.', evidenceIds: [], confidence: 'low' }], nextPractice: [{ drillId: 'sum-drill', reason: 'Try an example.' }] } });
+    await completeFixtureJob(service, claimed!, { kind: 'coach', actualUsd: 0, model: 'synthetic-fixture', promptVersion: 'fixture-v1', report: { overview: 'No final test observation was recorded.', rubric: [{ criterionId: 'correctness', level: 'Not observed', feedback: 'Run a small example next time.', evidenceIds: [], confidence: 'low' }], nextPractice: [{ drillId: 'sum-drill', reason: 'Try an example.' }] } });
     expect((await service.getSession(ownerA, session.id)).reports[0].generationId).toBe(first!.job.input.generationId);
     await expect(pool.query("update public.ai_practice_reports set model='changed' where session_id=$1", [session.id])).rejects.toMatchObject({ code: '23514' });
   });
@@ -242,17 +262,17 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
   it('persists frozen debrief, deterministic runs and immutable report generations separately', async () => {
     let session = await create();
     await service.requestRun(ownerA, session.id, mut(session.revision)); const run = await service.claimJob('worker');
-    await service.completeJob(run!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic fixture check', stdout: '', stderr: '', exitCode: 0, durationMs: 2, tests: [{ id: 'sum', title: 'Positive sum', status: 'failed' }] } });
+    await completeFixtureJob(service, run!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic fixture check', stdout: '', stderr: '', exitCode: 0, durationMs: 2, tests: [{ id: 'sum', title: 'Positive sum', status: 'failed' }] } });
     session = await service.getSession(ownerA, session.id);
     await service.command(ownerA, session.id, { ...mut(session.revision), action: 'finish' }); const question = await service.claimJob('worker');
-    await service.completeJob(question!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'ask_probe', question: 'What did you check?', competencyId: 'correctness', evidenceIds: [], probeId: 'probe' } });
+    await completeFixtureJob(service, question!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'ask_probe', question: 'What did you check?', competencyId: 'correctness', evidenceIds: [], probeId: 'probe' } });
     session = await service.getSession(ownerA, session.id);
     await service.commitTurn(ownerA, session.id, { ...mut(session.revision), text: 'I found subtraction instead of addition.' }); const end = await service.claimJob('worker');
-    await service.completeJob(end!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'end_debrief', evidenceIds: [] } });
+    await completeFixtureJob(service, end!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'end_debrief', evidenceIds: [] } });
     session = await service.getSession(ownerA, session.id); await service.command(ownerA, session.id, { ...mut(session.revision), action: 'submit' });
     const coach = await service.claimJob('worker'), context = await service.exportSession(ownerA, session.id);
     const report: CoachOutput = { overview: 'The recorded check failed; inspect the operation.', rubric: [{ criterionId: 'correctness', level: 'Developing', feedback: 'Compare operator and contract.', evidenceIds: [context.frozenEvidence!.items[0].id], confidence: 'low' }], nextPractice: [{ drillId: 'sum-drill', reason: 'Work through negative examples.' }] };
-    await service.completeJob(coach!, { kind: 'coach', report, model: 'synthetic-fixture', promptVersion: 'test-v1', actualUsd: 0 });
+    await completeFixtureJob(service, coach!, { kind: 'coach', report, model: 'synthetic-fixture', promptVersion: 'test-v1', actualUsd: 0 });
     const reloaded = new SessionService(new PostgresPracticeStore(servicePool), () => fixture), persisted = await reloaded.getSession(ownerA, session.id);
     expect(persisted.lifecycle).toBe('completed'); expect(persisted.turns).toHaveLength(2); expect(persisted.runs).toHaveLength(1); expect(persisted.reports).toHaveLength(1);
     expect(persisted.frozenEvidence!.items.some(e => e.content.includes('subtraction'))).toBe(true);

@@ -13,9 +13,11 @@ import type { RunSelection } from '../interview-practice/check-policy';
 import { emitTelemetry, telemetryConfig } from './telemetry';
 import { isUnseenFocusedRetest } from '../interview-practice/telemetry-learning';
 import type { JobClaim } from '../interview-practice/types';
+import { compatibleInferenceBinding } from '../ai/binding';
 
 class AdmittedInputMismatch extends Error {}
 class MissingRuntimeBinding extends Error {}
+class MissingInferenceBinding extends Error {}
 
 async function executeAdmittedSnapshot(scenario: Scenario, files: Record<string, string>, signal: AbortSignal, runtimeBinding: RuntimeBinding, selection?: RunSelection, claim?: JobClaim): Promise<RunExecution> {
   if (!await executionAdmissionOpen()) return {
@@ -45,11 +47,16 @@ export async function processOneJob(service: SessionService, workerId = `worker-
     const session = await service.exportSession(claim.job.ownerId, claim.job.sessionId);
     const scenario = getScenario(session.scenarioId, session.scenarioVersion);
     const snapshot = session.snapshots.find(s => s.id === claim.job.snapshotId);
+    const storedJob = session.jobs.find(job => job.id === claim.job.id);
     // Verify the exact admitted private package and immutable snapshot before
     // execution or inference. Completion validation alone is too late to avoid
     // spending on a replaced same-version package or executing changed checks.
-    if (!scenario || !snapshot || digest(scenario) !== session.scenarioDigest || digest(snapshot.files) !== snapshot.sha256
-      || (claim.job.kind === 'run' && (digest(claim.job.input) !== claim.job.fingerprint || digest(claim.job.input.runtime) !== digest(scenario.runtime)))) {
+    if (!scenario || !snapshot || !storedJob || storedJob.kind !== claim.job.kind || storedJob.snapshotId !== claim.job.snapshotId
+      || storedJob.fingerprint !== claim.job.fingerprint || storedJob.reservedUsd !== claim.job.reservedUsd
+      || storedJob.claimToken !== claim.claimToken || storedJob.fencingToken !== claim.fencingToken || storedJob.workerId !== claim.workerId || storedJob.state !== 'running' || storedJob.cancellationRequested
+      || digest(storedJob.input) !== storedJob.fingerprint || digest(scenario) !== session.scenarioDigest || digest(snapshot.files) !== snapshot.sha256
+      || digest(claim.job.input) !== claim.job.fingerprint
+      || (claim.job.kind === 'run' && digest(claim.job.input.runtime) !== digest(scenario.runtime))) {
       throw new AdmittedInputMismatch();
     }
     if (claim.job.kind === 'run') {
@@ -57,6 +64,9 @@ export async function processOneJob(service: SessionService, workerId = `worker-
     }
     const runtimeBinding = claim.job.kind === 'run' ? parseRuntimeBinding(claim.job.input.runtimeBinding,scenario.runtime.image) : null;
     if (claim.job.kind === 'run' && !runtimeBinding) throw new MissingRuntimeBinding();
+    const inferenceBinding = storedJob.kind === 'run' ? null : compatibleInferenceBinding(storedJob.input.inferenceBinding, storedJob.kind);
+    if (claim.job.kind === 'assistant' && (!inferenceBinding || claim.job.input.forceAuthored || claim.job.reservedUsd + 1e-9 < inferenceBinding.reserveUsd)) throw new MissingInferenceBinding();
+    const authored = claim.job.input.forceAuthored || !inferenceBinding || claim.job.reservedUsd + 1e-9 < inferenceBinding.reserveUsd;
     session.files = structuredClone(snapshot.files);
     // Assistant inputs must refer to the admitted snapshot even if autosave advanced meanwhile.
     if (claim.job.kind === 'assistant') session.snapshots = session.snapshots.filter(s => s.sequence <= snapshot.sequence);
@@ -64,9 +74,9 @@ export async function processOneJob(service: SessionService, workerId = `worker-
     externalWorkStarted = true;
     const result = claim.job.kind === 'run'
       ? { kind: 'run' as const, run: await executeAdmittedSnapshot(scenario, snapshot.files, signal, runtimeBinding!, claim.job.input.selection === 'learner' ? 'learner' : undefined, claim), actualUsd: 0 }
-      : claim.job.kind === 'interviewer' ? (claim.job.input.forceAuthored ? { kind: 'interviewer' as const, proposal: authoredQuestion(scenario, session), model: 'authored', actualUsd: 0 } : await interview(scenario, session, signal))
-      : claim.job.kind === 'assistant' ? await assist(scenario, session, claim.job.input, signal)
-      : claim.job.input.forceAuthored ? { kind: 'coach' as const, report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 } : await coach(scenario, session, signal);
+      : claim.job.kind === 'interviewer' ? (authored ? { kind: 'interviewer' as const, proposal: authoredQuestion(scenario, session), model: 'authored', actualUsd: 0 } : await interview(scenario, session, signal, inferenceBinding!))
+      : claim.job.kind === 'assistant' ? await assist(scenario, session, claim.job.input, signal, inferenceBinding!)
+      : authored ? { kind: 'coach' as const, report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 } : await coach(scenario, session, signal, inferenceBinding!);
     const accepted = await service.completeJob(claim, result);
     if (accepted) {
       const metric = claim.job.kind === 'run' ? 'run.result' : claim.job.kind === 'coach' ? 'report.ready' : claim.job.kind === 'interviewer' ? 'text.turn' : null;
@@ -80,7 +90,9 @@ export async function processOneJob(service: SessionService, workerId = `worker-
     }
   } catch (error) {
     const definitelyNotCalled = !externalWorkStarted || error instanceof ProviderFailure && !error.mayHaveBilled;
-    const failed = await service.failJob(claim, error instanceof MissingRuntimeBinding
+    const failed = await service.failJob(claim, error instanceof MissingInferenceBinding
+      ? 'This queued AI operation has no supported admitted inference policy. No inference started. Explicitly request new assistance when the service is configured.'
+      : error instanceof MissingRuntimeBinding
       ? 'This queued run predates immutable runtime admission or has an invalid binding. No execution started. Configure the reviewed image and explicitly request a new run.'
       : error instanceof AdmittedInputMismatch
       ? 'The admitted scenario or snapshot no longer matches its saved identity. No execution or inference started. Restore the original package before retrying.'

@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { withDisposablePostgres } from '../scripts/operations/disposable-postgres';
@@ -13,7 +14,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== '1')('accepted edit und
       const base = (await service.createSession(owner, { scenarioId: 'monetary-validation', requestId: randomUUID() })).session;
       await service.requestAssistant(owner, base.id, { requestId: randomUUID(), expectedRevision: base.revision, mode: 'edit', message: 'Synthetic SQL edit fixture' });
       const claim = (await service.claimJob('undo-fixture-worker'))!;
-      await service.completeJob(claim, { kind: 'assistant', message: 'Synthetic change', files: { 'quote.py': '# SQL proposed change' }, model: 'fixture', actualUsd: 0 });
+      await completeFixtureJob(service, claim, { kind: 'assistant', message: 'Synthetic change', files: { 'quote.py': '# SQL proposed change' }, model: 'fixture', actualUsd: 0 });
       let current = await service.getSession(owner, base.id); const proposalId = current.editProposals[0].id;
       current = (await service.decideEdit(owner, base.id, { requestId: randomUUID(), expectedRevision: current.revision, proposalId, decision: 'accept' })).session;
       const before = await service.exportSession(owner, base.id), request = { requestId: randomUUID(), expectedRevision: current.revision, proposalId };

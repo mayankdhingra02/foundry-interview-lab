@@ -11,17 +11,19 @@ import { assertRequestNotErased, rememberErasedRequests } from './deleted-reques
 import type { RunSelection } from '../interview-practice/check-policy';
 import { admittedRunSuite, selectRunSuite } from '../interview-practice/learner-checks';
 import { MAX_ADVISORY_MINUTES, practiceConditionsSchema, setupExtraMinutes } from '../interview-practice/timing';
+import { compatibleInferenceBinding, configuredInferenceBinding, parseInferenceBinding, validateInferenceCompletion, validateInferenceRecord, type InferenceBinding } from '../ai/binding';
+import type { AiRole } from '../ai/policy';
 
 export type SessionAdmissionContext = { ownerId: string; sessionId: string; scenarioId: string; scenarioVersion: string; requestId: string; now: string; database: PracticeDatabase };
-export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void>; admissionLimits?: Partial<AdmissionLimits>; runtimeBinding?: (scenario: Scenario) => RuntimeBinding | null };
+export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void>; admissionLimits?: Partial<AdmissionLimits>; runtimeBinding?: (scenario: Scenario) => RuntimeBinding | null; inferenceBinding?: (role: AiRole) => InferenceBinding | null };
 export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; voice?: boolean; accommodations?: string[]; practiceConditions?: SessionConfiguration['practiceConditions'] };
 export type SessionMutationResult = { session: SessionView; job?: JobView; hint?: string };
 export type TrustedSupportGuard = (database: PracticeDatabase, now: string) => void;
 /** Trusted, synchronous decision captured before entering the store transaction. */
 export type FreshWorkGuard = () => void;
 export function publicJob(job: PracticeJob): JobView {
-  const { ownerId: _owner, claimToken: _claim, workerId: _worker, input: _input, fingerprint: _fingerprint, inference: _inference, ...view } = structuredClone(job);
-  void _owner; void _claim; void _worker; void _input; void _fingerprint; void _inference;
+  const { ownerId: _owner, claimToken: _claim, workerId: _worker, input: _input, fingerprint: _fingerprint, inference: _inference, attemptObservations: _observations, ...view } = structuredClone(job);
+  void _owner; void _claim; void _worker; void _input; void _fingerprint; void _inference; void _observations;
   return view;
 }
 export function sessionView(session: Session): SessionView {
@@ -31,7 +33,8 @@ export function sessionView(session: Session): SessionView {
 }
 export class SessionService {
   private readonly now: () => Date;
-  private readonly limits: Required<Omit<ServiceOptions, 'now' | 'reservations' | 'admissionPolicy' | 'admissionLimits' | 'runtimeBinding'>>;
+  private readonly limits: Required<Omit<ServiceOptions, 'now' | 'reservations' | 'admissionPolicy' | 'admissionLimits' | 'runtimeBinding' | 'inferenceBinding'>>;
+  private readonly resolveInferenceBinding: (role: AiRole) => InferenceBinding | null;
   private readonly resolveRuntimeBinding: (scenario: Scenario) => RuntimeBinding | null;
   private readonly admissionLimits: AdmissionLimits;
   private readonly admissionPolicy: ServiceOptions['admissionPolicy'];
@@ -41,8 +44,9 @@ export class SessionService {
     this.admissionPolicy = options.admissionPolicy;
     this.admissionLimits = admissionLimits(options.admissionLimits);
     this.resolveRuntimeBinding = options.runtimeBinding ?? configuredRuntimeBinding;
-    const { now: _now, reservations: _reservations, admissionPolicy: _policy, admissionLimits: _admissionLimits, runtimeBinding: _runtimeBinding, ...limits } = options;
-    void _now; void _reservations; void _policy; void _admissionLimits; void _runtimeBinding;
+    this.resolveInferenceBinding = options.inferenceBinding ?? configuredInferenceBinding;
+    const { now: _now, reservations: _reservations, admissionPolicy: _policy, admissionLimits: _admissionLimits, runtimeBinding: _runtimeBinding, inferenceBinding: _inferenceBinding, ...limits } = options;
+    void _now; void _reservations; void _policy; void _admissionLimits; void _runtimeBinding; void _inferenceBinding;
     this.limits = { maxDailySessions: 10, maxActiveSessions: 3, maxDailyUsd: 5, maxMonthlyUsd: 50, maxGlobalDailyUsd: 50, maxSessionUsd: 1, maxRuns: 30, maxAiCalls: 25, leaseMs: 60_000, ...limits };
     this.reservations = { run: 0, interviewer: 0.04, assistant: 0.08, coach: 0.15, ...options.reservations };
     if (Object.values(this.limits).some(value => !Number.isFinite(value) || value <= 0) || Object.values(this.reservations).some(value => !Number.isFinite(value) || value < 0)) throw new DomainError('invalid', 'Practice limits must be finite positive numbers and reservations nonnegative.');
@@ -83,9 +87,23 @@ export class SessionService {
     const commitment = session.usage.reservedUsd + session.usage.spentUsd + session.usage.uncertainUsd;
     const { userDailyUsd: daily, userMonthlyUsd: monthly, globalDailyUsd: globalDaily } = budgetTotals(db.ledger, session.ownerId, now);
     if (amount > 0 && (commitment + amount > this.limits.maxSessionUsd + 1e-9 || daily + amount > this.limits.maxDailyUsd + 1e-9 || monthly + amount > this.limits.maxMonthlyUsd + 1e-9 || globalDaily + amount > this.limits.maxGlobalDailyUsd + 1e-9)) throw new DomainError('quota', 'The AI budget cannot cover this request. Your work is still saved.');
+    this.preserveAttemptObservation(job, now);
+    delete job.inference; delete job.actualUsd;
     session.usage.reservedUsd += amount;
     job.reservationSequence = (job.reservationSequence ?? 0) + 1;
     db.ledger.push({ id: randomUUID(), ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:reserve`, kind: 'reservation', amountUsd: amount, createdAt: now, budgetAt: now });
+  }
+  private preserveAttemptObservation(job: PracticeJob, now: string, legacy = false) {
+    if (job.attempt <= 0 || !legacy && !job.claimToken) return;
+    const observations = job.attemptObservations ?? [];
+    if (!legacy && observations.some(row => row.reservationSequence === job.reservationSequence)) return;
+    // At most three started attempts are admitted. Never truncate observed
+    // usage if malformed legacy state exceeds this bound.
+    if (observations.length >= 3) throw new DomainError('unavailable', 'Attempt observation history exceeded its bounded capacity. Saved work remains available.');
+    observations.push({ attempt: job.attempt, reservationSequence: legacy ? null : job.reservationSequence, observedAt: now,
+      outcome: legacy ? 'legacy-unattributed' : job.actualUsd === undefined && job.reservedUsd > 0 ? 'uncertain' : 'settled',
+      ...(job.actualUsd === undefined ? {} : { actualUsd: job.actualUsd }), ...(job.inference ? { inference: structuredClone(job.inference) } : {}) });
+    job.attemptObservations = observations;
   }
   private enqueue(db: PracticeDatabase, session: Session, kind: JobKind, requestId: string, input: Record<string, unknown>, now: string): PracticeJob {
     assertJobAdmission(db, session.ownerId, this.admissionLimits);
@@ -95,6 +113,18 @@ export class SessionService {
     if (session.jobs.some(j => j.kind === kind && ['queued', 'running'].includes(j.state))) throw new DomainError('conflict', `A ${kind} operation is already pending.`);
     const job: PracticeJob = { id: randomUUID(), sessionId: session.id, ownerId: session.ownerId, kind, state: 'queued', requestId, fingerprint: digest(input), snapshotId: selectedSnapshot(session).id, input: structuredClone(input), createdAt: now, updatedAt: now, attempt: 0, reservationSequence: 0, fencingToken: 0, claimToken: null, workerId: null, leaseExpiresAt: null, cancellationRequested: false, reservedUsd: this.reservations[kind] };
     if ((kind === 'interviewer' || kind === 'coach') && (aiLimitReached || job.reservedUsd === 0)) { job.reservedUsd = 0; job.input.forceAuthored = true; }
+    if (kind !== 'run' && !job.input.forceAuthored) {
+      let binding: InferenceBinding | null = null;
+      try { binding = compatibleInferenceBinding(this.resolveInferenceBinding(kind), kind); } catch { /* Fresh configuration fails closed. */ }
+      if (!binding) {
+        if (kind === 'assistant') throw new DomainError('unavailable', 'AI assistance is unavailable. Your saved work remains available.');
+        job.reservedUsd = 0; job.input.forceAuthored = true;
+      } else {
+        // Configured/test reservation floors can only make the bound more conservative.
+        binding.reserveUsd = Math.max(binding.reserveUsd, job.reservedUsd);
+        job.input.inferenceBinding = binding; job.reservedUsd = binding.reserveUsd;
+      }
+    }
     try { this.reserve(db, session, job, job.reservedUsd, now); }
     catch (error) {
       if (!(error instanceof DomainError) || error.code !== 'quota' || (kind !== 'interviewer' && kind !== 'coach')) throw error;
@@ -343,6 +373,11 @@ export class SessionService {
             appendEvent(session, 'operation.failed', { jobId: job.id, error: job.safeError }, job.requestId, now); continue;
           }
         }
+        if (job.state === 'queued' && (job.inference || job.actualUsd !== undefined)) {
+          // Historical already-queued retries may retain prior current fields.
+          // Preserve those observations without inventing a reservation link.
+          this.preserveAttemptObservation(job, now, true); delete job.inference; delete job.actualUsd;
+        }
         job.state = 'running'; job.attempt += 1; job.fencingToken += 1; job.claimToken = randomUUID(); job.workerId = workerId; job.updatedAt = now; job.leaseExpiresAt = new Date(this.now().getTime() + this.limits.leaseMs).toISOString();
         return { job: structuredClone(job), workerId, claimToken: job.claimToken, fencingToken: job.fencingToken };
       }
@@ -366,6 +401,7 @@ export class SessionService {
       const { session, job } = found;
       if (job.kind !== result.kind) throw new DomainError('invalid', 'Worker result does not match the admitted job.');
       const scenario = this.scenario(session), snapshot = session.snapshots.find(s => s.id === job.snapshotId);
+      validateInferenceCompletion(job, result, scenario, session);
       if (!snapshot) throw new DomainError('unavailable', 'Admitted snapshot not found.');
       if (result.kind === 'run') {
         const run = result.run;
@@ -412,6 +448,12 @@ export class SessionService {
     return this.store.transaction(db => {
       const now = this.at(), found = this.locateClaim(db, claim, now); if (!found) return false;
       const { session, job } = found;
+      if (job.kind !== 'run' && actualUsd !== undefined && actualUsd > 0 && !inference) throw new DomainError('invalid', 'Billed inference requires recorded admitted-policy usage.');
+      if (inference) {
+        const binding = job.kind === 'run' ? null : parseInferenceBinding(job.input.inferenceBinding, job.kind);
+        if (!binding || job.input.forceAuthored || job.reservedUsd + 1e-9 < binding.reserveUsd || digest(job.input) !== job.fingerprint) throw new DomainError('invalid', 'Failed inference admission identity is invalid.');
+        validateInferenceRecord(inference, binding, actualUsd);
+      }
       // Caller supplies a safe category/message, never a provider body or secret.
       job.safeError = boundedText(error, 'Safe failure description', 500); job.state = 'failed'; job.updatedAt = now; job.leaseExpiresAt = null;
       if (inference) job.inference = structuredClone(inference);

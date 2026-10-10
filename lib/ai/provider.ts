@@ -1,10 +1,14 @@
-import type { CoachOutput, EvidenceItem, InferenceRecord, InterviewProposal, JobResult, Scenario, Session } from '../interview-practice/types';
+import type { EvidenceItem, InferenceRecord, JobResult, Scenario, Session } from '../interview-practice/types';
 import { buildEvidence, validateInterviewProposal, validateReport } from '../interview-practice/evidence';
-import { capabilities } from '../server/config';
-import { INPUT_BYTES, modelPolicy, type AiRole } from './policy';
+import { enabled } from '../server/config';
+import { authoredQuestion, observationOnlyReport } from './authored';
+export { authoredQuestion, observationOnlyReport } from './authored';
+import { INPUT_BYTES, type AiRole } from './policy';
+import { compatibleInferenceBinding, configuredInferenceBinding, inferenceBindingDigest, PROMPT_VERSION, type InferenceBinding } from './binding';
+export { PROMPT_VERSION } from './binding';
 import { sanitizeModelContext } from './privacy';
+import { validateFiles } from '../interview-practice/domain';
 
-export const PROMPT_VERSION = 'foundry-2026-10-09-v2';
 type JsonSchema = Record<string, unknown>;
 const string = { type: 'string' };
 const strings = { type: 'array', items: string };
@@ -22,46 +26,57 @@ export class ProviderFailure extends Error {
   constructor(public readonly mayHaveBilled: boolean, public readonly inference?: InferenceRecord, public readonly category?: 'privacy_input') { super('Model inference could not finish.'); }
 }
 
-async function infer(role: AiRole, instructions: string, context: unknown, schema: JsonSchema, signal?: AbortSignal): Promise<ProviderResponse> {
+export function inferenceEnabled(role: AiRole): boolean {
+  return Boolean(process.env.OPENAI_API_KEY) && enabled('FEATURE_AI_INTERVIEW', true) && (role !== 'coach' || enabled('FEATURE_REPORT_GENERATION', process.env.NODE_ENV !== 'production'));
+}
+async function infer(role: AiRole, instructions: string, context: unknown, schema: JsonSchema, signal: AbortSignal | undefined, admitted: InferenceBinding): Promise<ProviderResponse> {
   const key = process.env.OPENAI_API_KEY;
-  const caps = capabilities();
-  if (!key || !caps.ai || (role === 'coach' && !caps.coaching)) throw new ProviderFailure(false);
-  let policy;
-  try { policy = modelPolicy(); } catch { throw new ProviderFailure(false); }
+  if (!key || !inferenceEnabled(role)) throw new ProviderFailure(false);
+  const policy = compatibleInferenceBinding(admitted, role);
+  if (!policy) throw new ProviderFailure(false);
   const sanitized = sanitizeModelContext(context);
   if (role === 'assistant' && (context as { mode?: string }).mode === 'edit' && sanitized.redactions) throw new ProviderFailure(false, undefined, 'privacy_input');
   const input = JSON.stringify({ ...(sanitized.value as Record<string, unknown>), privacyRedactions: sanitized.redactions });
-  if (Buffer.byteLength(input) > INPUT_BYTES[role]) throw new ProviderFailure(false);
+  if (Buffer.byteLength(input) > policy.maxInputBytes) throw new ProviderFailure(false);
+  if (Buffer.byteLength(`${boundary}\nRole: ${role}. ${instructions}`) + Buffer.byteLength(JSON.stringify(schema)) > policy.instructionAllowanceBytes) throw new ProviderFailure(false);
   const startedAt = new Date().toISOString();
   let response: Response;
   try {
     response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: policy.model, store: false, max_output_tokens: policy.maxOutput,
+      body: JSON.stringify({ model: policy.model, store: false, max_output_tokens: policy.maxOutputTokens,
         instructions: `${boundary}\nRole: ${role}. ${instructions}`,
         input: [{ role: 'user', content: input }],
         text: { format: { type: 'json_schema', name: `foundry_${role}`, strict: true, schema } }
       }),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(40_000)]) : AbortSignal.timeout(40_000)
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(policy.timeoutMs)]) : AbortSignal.timeout(policy.timeoutMs)
     });
   } catch { throw new ProviderFailure(true); }
   if (!response.ok) throw new ProviderFailure(response.status >= 500 || response.status === 408);
   type Body = { id?: string; status?: string; model?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }>; usage?: { input_tokens?: number; output_tokens?: number } };
   let data: Body;
-  try { data = await response.json() as Body; } catch { throw new ProviderFailure(true); }
+  try {
+    const reader = response.body?.getReader(); if (!reader) throw new Error();
+    const chunks: Uint8Array[] = []; let bytes = 0;
+    try { while (true) { const part = await reader.read(); if (part.done) break; bytes += part.value.length; if (bytes > policy.maxResponseBytes) { await reader.cancel(); throw new Error(); } chunks.push(part.value); } } finally { reader.releaseLock(); }
+    data = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Body;
+  } catch { throw new ProviderFailure(true); }
   const inputTokens = data?.usage?.input_tokens, outputTokens = data?.usage?.output_tokens;
-  if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens) || inputTokens! < 0 || outputTokens! < 0) throw new ProviderFailure(true);
+  if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens) || inputTokens! < 0 || outputTokens! < 0 || typeof data.model !== 'string' || !data.model || data.model.length > 200) throw new ProviderFailure(true);
   const record: InferenceRecord = {
-    requestedModel: policy.model, returnedModel: typeof data.model === 'string' ? data.model.slice(0, 200) : policy.model,
-    promptVersion: PROMPT_VERSION, inputTokens: inputTokens!, outputTokens: outputTokens!, startedAt, completedAt: new Date().toISOString(),
+    requestedModel: policy.model, returnedModel: data.model,
+    provider: policy.provider, role, bindingDigest: inferenceBindingDigest(policy), schemaVersion: policy.schemaVersion, contextVersion: policy.contextVersion,
+    promptVersion: policy.promptVersion, inputTokens: inputTokens!, outputTokens: outputTokens!, startedAt, completedAt: new Date().toISOString(),
     usd: (inputTokens! * policy.inputRate + outputTokens! * policy.outputRate) / 1_000_000, validated: false,
     ...(response.headers.get('x-request-id') ? { providerRequestId: response.headers.get('x-request-id')!.slice(0, 200) } : {}),
     ...(typeof data.id === 'string' ? { responseId: data.id.slice(0, 200) } : {})
   };
+  if (record.usd > 100) throw new ProviderFailure(true);
   try {
+    if (inputTokens! > policy.maxInputBytes + policy.instructionAllowanceBytes || outputTokens! > policy.maxOutputTokens) throw new Error();
     if (data.status !== 'completed' || !Array.isArray(data.output)) throw new Error();
     const output = data.output.flatMap(item => item.content ?? []).filter(c => c.type === 'output_text').map(c => c.text ?? '').join('');
-    if (!output || output.length > 60_000) throw new Error();
+    if (!output || output.length > policy.maxOutputCharacters) throw new Error();
     return { value: JSON.parse(output), record };
   } catch { throw new ProviderFailure(true, record); }
 }
@@ -82,36 +97,20 @@ function evidenceContext(session: Session, base: Record<string, unknown>, role: 
   return context;
 }
 
-export function authoredQuestion(scenario: Scenario, session: Session): InterviewProposal {
-  const questions = session.turns.filter(t => t.role === 'interviewer');
-  if (questions.length >= 6) return { action: 'end_debrief', evidenceIds: [] };
-  const probes = scenario.probes.filter(p => p.stageId === session.stageId);
-  const probe = probes.find(p => !questions.some(t => t.text === p.question) && questions.filter(t => t.competencyId === p.competencyId).length < 3);
-  if (!probe) return { action: 'end_debrief', evidenceIds: [] };
-  const snapshot = buildEvidence(session).find(e => e.kind === 'snapshot');
-  return { action: 'ask_probe', question: probe.question, competencyId: probe.competencyId, probeId: probe.id, evidenceIds: snapshot ? [snapshot.id] : [] };
-}
-export function observationOnlyReport(scenario: Scenario): CoachOutput {
-  return {
-    overview: 'AI coaching was unavailable. This report preserves your recorded work and next-practice links; it does not assess your skill. Inspect the actual code, test observations and discussion below.',
-    rubric: scenario.rubric.map(c => ({ criterionId: c.id, level: 'Not observed', confidence: 'low', feedback: 'No validated AI or expert assessment was produced for this criterion. Recorded evidence remains available for your review.', evidenceIds: [] })),
-    nextPractice: scenario.drills.slice(0, 2).map(d => ({ drillId: d.id, reason: 'An authored practice exercise related to this scenario. This suggestion does not imply a measured weakness.' }))
-  };
-}
 function failedUsage(error: unknown, response?: ProviderResponse) {
   const inference = response?.record ?? (error instanceof ProviderFailure ? error.inference : undefined);
   return { inference: inference ? { ...inference, validated: false } : undefined,
     actualUsd: inference?.usd ?? (error instanceof ProviderFailure && error.mayHaveBilled ? undefined : 0) };
 }
-export async function interview(scenario: Scenario, session: Session, signal?: AbortSignal): Promise<JobResult> {
-  if (!capabilities().ai) return { kind: 'interviewer', proposal: authoredQuestion(scenario, session), model: 'authored', actualUsd: 0 };
+export async function interview(scenario: Scenario, session: Session, signal?: AbortSignal, binding?: InferenceBinding): Promise<JobResult> {
+  if (!inferenceEnabled('interviewer')) return { kind: 'interviewer', proposal: authoredQuestion(scenario, session), model: 'authored', actualUsd: 0 };
   let response: ProviderResponse | undefined;
   try {
     response = await infer('interviewer', 'Ask one relevant neutral follow-up about the actual frozen work. Target an allowed competency and authored probe in the current stage. Required coverage and probe limits are server policy. You cannot edit files or teach the solution. Use evidence IDs for the question premise; ask neutrally when evidence is incomplete. End after six interviewer questions or exhausted probe coverage.', evidenceContext(session, {
       brief: { title: scenario.title, stage: session.stageId, requirements: scenario.stages.find(s => s.id === session.stageId)?.requirements },
       rubric: scenario.rubric, probes: scenario.probes.filter(p => p.stageId === session.stageId),
       dialogue: session.turns.slice(-12).map(t => ({ ...t, text: t.text.slice(0, 1000) }))
-    }, 'interviewer'), interviewSchema, signal);
+    }, 'interviewer'), interviewSchema, signal, binding ?? configuredInferenceBinding('interviewer'));
     const value = response.value as Record<string, unknown>;
     const proposal = validateInterviewProposal(Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null)), scenario, session);
     return { kind: 'interviewer', proposal, model: response.record.returnedModel, inference: { ...response.record, validated: true }, actualUsd: response.record.usd };
@@ -120,15 +119,15 @@ export async function interview(scenario: Scenario, session: Session, signal?: A
     return { kind: 'interviewer', proposal: authoredQuestion(scenario, session), model: 'authored', ...failedUsage(error, response) };
   }
 }
-export async function coach(scenario: Scenario, session: Session, signal?: AbortSignal): Promise<JobResult> {
+export async function coach(scenario: Scenario, session: Session, signal?: AbortSignal, binding?: InferenceBinding): Promise<JobResult> {
   if (!session.frozenEvidence) throw new ProviderFailure(false);
-  if (!capabilities().coaching) return { kind: 'coach', report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 };
+  if (!inferenceEnabled('coach')) return { kind: 'coach', report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 };
   let response: ProviderResponse | undefined;
   try {
     response = await infer('coach', 'Assess only the frozen evidence against every rubric criterion exactly once. Non-Not-observed findings require supporting evidence IDs. Do not infer understanding without recorded explanation or penalize optional AI non-use. Treat test outcomes as facts about their recorded snapshots, not proof of understanding. Excerpts and omitted evidence limit what can be assessed. Recommend one to three allowed drill IDs. State uncertainty and evidence limits. Never claim an unexecuted check passed.', evidenceContext(session, {
       rubric: scenario.rubric, teachingNotes: scenario.drills, configuration: session.configuration,
       helpUsed: session.hintsOpened, exposure: session.promptExposure, evidenceDigest: session.frozenEvidence.digest
-    }, 'coach'), coachSchema, signal);
+    }, 'coach'), coachSchema, signal, binding ?? configuredInferenceBinding('coach'));
     const report = validateReport(response.value, scenario, session.frozenEvidence);
     return { kind: 'coach', report, model: response.record.returnedModel, promptVersion: PROMPT_VERSION, inference: { ...response.record, validated: true }, actualUsd: response.record.usd };
   } catch (error) {
@@ -136,14 +135,14 @@ export async function coach(scenario: Scenario, session: Session, signal?: Abort
     return { kind: 'coach', report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, ...failedUsage(error, response) };
   }
 }
-export async function assist(scenario: Scenario, session: Session, input: Record<string, unknown>, signal?: AbortSignal): Promise<JobResult> {
-  if (!capabilities().assistant) throw new ProviderFailure(false);
+export async function assist(scenario: Scenario, session: Session, input: Record<string, unknown>, signal?: AbortSignal, binding?: InferenceBinding): Promise<JobResult> {
+  if (!inferenceEnabled('assistant')) throw new ProviderFailure(false);
   const response = await infer('assistant', 'Help with the learner\'s request under their declared assistance policy. You cannot see reference solutions or protected checks. For ask/plan return no file changes. For edit propose complete replacement text only for existing allowed paths; the learner must preview and accept it. Explain the proposal and relevant checks. Do not claim execution or produce a skill grade.', {
     request: input.prompt ?? input.message, mode: input.mode, brief: scenario.summary,
     stage: scenario.stages.find(s => s.id === session.stageId), files: session.files,
     visibleTests: scenario.tests.filter(t => t.visible).map(t => ({ id: t.id, source: t.source })),
     recentMessages: session.assistantMessages.slice(-6)
-  }, assistantSchema, signal);
+  }, assistantSchema, signal, binding ?? configuredInferenceBinding('assistant'));
   try {
     const value = response.value as { message: unknown; files: unknown };
     if (typeof value.message !== 'string' || !value.message.trim() || value.message.length > 16000 || !Array.isArray(value.files)) throw new Error();
@@ -153,6 +152,7 @@ export async function assist(scenario: Scenario, session: Session, input: Record
       files[file.path] = file.content;
     }
     if (input.mode !== 'edit' && Object.keys(files).length) throw new Error();
+    if (Object.keys(files).length) validateFiles({ ...session.files, ...files }, scenario);
     return { kind: 'assistant', message: value.message, files, model: response.record.returnedModel, inference: { ...response.record, validated: true }, actualUsd: response.record.usd };
   } catch { throw new ProviderFailure(true, response.record); }
 }

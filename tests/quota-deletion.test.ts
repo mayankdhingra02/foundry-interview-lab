@@ -8,11 +8,13 @@ import { reserveVoice, settleVoice } from '../lib/voice/ledger';
 import type { VoiceConfig } from '../lib/voice/config';
 import { scenario } from './review-fixtures';
 import { voiceDebriefFixture } from './voice-fixtures';
+import { completeFixtureJob } from './inference-fixtures';
+import { inferenceBindingFromPolicy } from '../lib/ai/binding';
 
 const at = '2026-10-09T12:00:00.000Z';
 function setup(options: ServiceOptions = {}) {
   const store = new MemoryPracticeStore();
-  const service = new SessionService(store, () => structuredClone(scenario), { now: () => new Date(at), maxDailySessions: 20, maxActiveSessions: 10, maxDailyUsd: .08, maxMonthlyUsd: .08, ...options });
+  const service = new SessionService(store, () => structuredClone(scenario), { now: () => new Date(at), maxDailySessions: 20, maxActiveSessions: 10, maxDailyUsd: .08, maxMonthlyUsd: .08, inferenceBinding: role => inferenceBindingFromPolicy(role, { model: 'synthetic-priced-fixture', inputRate: 1, outputRate: 10 / 3, maxOutput: 2400 }), ...options });
   const create = async (owner = 'owner-a', voice = false) => (await service.createSession(owner, { scenarioId: scenario.id, voice, requestId: randomUUID() })).session;
   const request = async (id: string, owner = 'owner-a') => service.requestAssistant(owner, id, { requestId: randomUUID(), expectedRevision: (await service.getSession(owner, id)).revision, mode: 'ask', message: 'PRIVATE-ASSISTANT-PROMPT' });
   return { store, service, create, request };
@@ -61,7 +63,7 @@ describe('content-free accounting during private attempt erasure', () => {
     if (state === 'cancelled') await service.cancelJob('owner-a', result.job!.id, { requestId: randomUUID() });
     else {
       const claim = (await service.claimJob('fixture-worker'))!;
-      if (state === 'completed') await service.completeJob(claim, { kind: 'assistant', model: 'synthetic-fixture', message: 'A synthetic answer.', actualUsd: .02 });
+      if (state === 'completed') await completeFixtureJob(service, claim, { kind: 'assistant', model: 'synthetic-fixture', message: 'A synthetic answer.', actualUsd: .02 });
       else await service.failJob(claim, 'Synthetic failure', 0);
     }
     const before = (await store.read()).ledger;
@@ -72,7 +74,7 @@ describe('content-free accounting during private attempt erasure', () => {
   it('uses the same queued/running/terminal treatment for Lab account erasure without touching another owner', async () => {
     const { store, service, create, request } = setup({ maxDailyUsd: 1, maxMonthlyUsd: .1 });
     const completed = await create(); await request(completed.id); const done = (await service.claimJob('fixture-worker'))!;
-    await service.completeJob(done, { kind: 'assistant', model: 'synthetic-fixture', message: 'A synthetic answer.', actualUsd: .02 });
+    await completeFixtureJob(service, done, { kind: 'assistant', model: 'synthetic-fixture', message: 'A synthetic answer.', actualUsd: .02 });
     const running = await create(); await request(running.id); const claim = (await service.claimJob('fixture-worker'))!;
     // Queue a zero-cost run alongside running AI, and separately queued AI on
     // another owner. The latter must remain untouched by this account erasure.

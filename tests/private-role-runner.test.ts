@@ -50,6 +50,14 @@ describe('separate private role recording and exact offline binding', () => {
     const noCharge = await recordPrivateRoleRun(context, { ...unitPrivateOptions(), roles: ['coach'], executor: async () => { throw new ProviderFailure(false); } });
     expect(noCharge.entries[0]).toMatchObject({ state: 'rejected', knownUsd: 0, uncertainUsd: 0 });
   });
+  it('rejects replacement of the separately journaled private binding', async () => {
+    const run = await recordPrivateRoleRun({ corpus: unitPrivateCorpus() }, { ...unitPrivateOptions(), roles: ['assistant-ask'], executor: async task => {
+      task.inferenceBinding = { ...task.inferenceBinding, inputRate: 0.5 };
+      return unitPrivateExecutor(task);
+    } });
+    expect(run.entries[0]).toMatchObject({ state: 'rejected', output: null, knownUsd: 0.00165 });
+    expect(run.inferenceBindings![0].inputRate).toBe(0.75);
+  });
   it('makes no provider call if the reservation journal write fails and retains an uncompleted journal on result-write failure', async () => {
     const context = { corpus: unitPrivateCorpus() }, executor = vi.fn(unitPrivateExecutor); let writes = 0;
     await expect(recordPrivateRoleRun(context, { ...unitPrivateOptions(), executor, persist: async () => { if (++writes === 2) throw new Error('disk'); } })).rejects.toThrow('disk'); expect(executor).not.toHaveBeenCalled();
@@ -82,5 +90,32 @@ describe('separate private role recording and exact offline binding', () => {
     const run = await recordPrivateRoleRun(context, { ...unitPrivateOptions(), executor: undefined });
     expect(run.entries.every(entry => entry.state === 'validated')).toBe(true); expect(requests).toHaveLength(5); expect(validatePrivateRoleRun(run, context).run).toEqual(run);
     for (const request of requests) expect(request.input[0].content).not.toContain(plan.tasks[0].attempt.scenario.tests.find(test => !test.visible)!.source);
+  });
+  it('uses one captured private policy for every production candidate despite later ambient drift', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'unit-placeholder-never-sent'); vi.stubEnv('FEATURE_AI_INTERVIEW', 'true'); vi.stubEnv('FEATURE_REPORT_GENERATION', 'true');
+    const context = { corpus: unitPrivateCorpus() }, plan = createPrivateRolePlan(context), bodies: Array<{ model: string; max_output_tokens: number }> = [], journals: PrivateRoleRun[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)); bodies.push(body); const result = await unitPrivateExecutor(plan.tasks[bodies.length - 1]);
+      const value = result.kind === 'coach' ? result.report : result.kind === 'interviewer' ? result.proposal : { message: 'Hypothetical private bound response.', files: [] };
+      return new Response(JSON.stringify({ id: `unit-private-bound-${bodies.length}`, status: 'completed', model: 'unit-private-resolved-snapshot', usage: { input_tokens: 1000, output_tokens: 200 }, output: [{ content: [{ type: 'output_text', text: JSON.stringify(value) }] }] }));
+    }));
+    const run = await recordPrivateRoleRun(context, { ...unitPrivateOptions(), executor: undefined, persist: async row => {
+      journals.push(row); vi.stubEnv('OPENAI_MODEL', 'different-current-model'); vi.stubEnv('OPENAI_INPUT_USD_PER_MILLION', 'invalid'); vi.stubEnv('OPENAI_OUTPUT_USD_PER_MILLION', '900'); vi.stubEnv('AI_MAX_OUTPUT_TOKENS', '600');
+    } });
+    expect(bodies).toHaveLength(5); expect(bodies.every(body => body.model === 'gpt-5.4-mini' && body.max_output_tokens === 2400)).toBe(true);
+    expect(run.entries.every(entry => entry.state === 'validated' && entry.knownUsd === 0.00165)).toBe(true);
+    expect(run.inferenceBindings).toEqual(journals[0].inferenceBindings); expect(validatePrivateRoleRun(run, context).run).toEqual(run);
+  });
+  it('keeps legacy private recordings readable and rejects altered new binding provenance', async () => {
+    const context = { corpus: unitPrivateCorpus() }, run = await recordPrivateRoleRun(context, unitPrivateOptions()), legacy = structuredClone(run);
+    delete legacy.inferenceBindings;
+    expect(() => validatePrivateRoleRun(legacy, context)).toThrow('missing its recorded policy');
+    for (const entry of legacy.entries) for (const field of ['provider', 'role', 'schemaVersion', 'contextVersion', 'bindingDigest'] as const) delete entry.inference?.[field];
+    vi.stubEnv('OPENAI_INPUT_USD_PER_MILLION', 'invalid');
+    expect(validatePrivateRoleRun(legacy, context).run).toEqual(legacy);
+    const changed = structuredClone(run); changed.inferenceBindings![0].contextVersion = 'changed-context';
+    expect(() => validatePrivateRoleRun(changed, context)).toThrow();
+    const missing = structuredClone(run); delete missing.entries[0].inference!.bindingDigest;
+    expect(() => validatePrivateRoleRun(missing, context)).toThrow();
   });
 });

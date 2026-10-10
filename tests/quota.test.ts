@@ -1,3 +1,6 @@
+import { inferenceBindingFromPolicy } from '../lib/ai/binding';
+import { fixtureInference } from './inference-fixtures';
+import { completeFixtureJob } from './inference-fixtures';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { LedgerEntry } from '../lib/interview-practice/types';
@@ -64,7 +67,7 @@ describe('reservation-owned UTC budget windows', () => {
 
 function setup(at: string, options: ServiceOptions = {}) {
   const clock = { value: new Date(at) }, store = new MemoryPracticeStore();
-  const service = new SessionService(store, () => structuredClone(scenario), { now: () => clock.value, maxSessionUsd: 10, maxDailyUsd: 10, maxMonthlyUsd: 100, maxGlobalDailyUsd: 100, ...options });
+  const service = new SessionService(store, () => structuredClone(scenario), { inferenceBinding: role => inferenceBindingFromPolicy(role, { model: 'synthetic-fixture-model', inputRate: 1, outputRate: 10 / 3, maxOutput: 2400 }), now: () => clock.value, maxSessionUsd: 10, maxDailyUsd: 10, maxMonthlyUsd: 100, maxGlobalDailyUsd: 100, ...options });
   const create = async (ownerId = 'owner-a') => (await service.createSession(ownerId,{ scenarioId: scenario.id, voice: true, requestId: randomUUID() })).session;
   const request = async (id: string, ownerId = 'owner-a') => { const session = await service.getSession(ownerId,id); return service.requestAssistant(ownerId,id,{ requestId: randomUUID(), expectedRevision: session.revision, mode: 'ask', message: 'Explain this code.' }); };
   return { clock, store, service, create, request };
@@ -73,8 +76,8 @@ async function boundarySettlement(context: ReturnType<typeof setup>, legacy = fa
   const session = await context.create(); await context.request(session.id); const claim = await context.service.claimJob('fixture-worker');
   if (legacy) await context.store.transaction(db => { for (const entry of db.ledger) delete entry.budgetAt; });
   const startedAt = context.clock.value.toISOString(); context.clock.value = new Date(next);
-  const inference = { requestedModel: 'fixture', returnedModel: 'fixture', promptVersion: 'fixture', inputTokens: 10, outputTokens: 10, startedAt, completedAt: next, usd: .02, validated: true };
-  expect(await context.service.completeJob(claim!,{ kind: 'assistant', model: 'synthetic-fixture', message: 'Synthetic response.', actualUsd: .02, inference })).toBe(true);
+  const inference = fixtureInference(claim!, .02, { startedAt, completedAt: next });
+  expect(await completeFixtureJob(context.service, claim!,{ kind: 'assistant', model: 'synthetic-fixture', message: 'Synthetic response.', actualUsd: .02, inference })).toBe(true);
   return { session, claim: claim!, inference };
 }
 describe('atomic AI and speech quota admission across UTC boundaries', () => {
@@ -104,8 +107,8 @@ describe('atomic AI and speech quota admission across UTC boundaries', () => {
     const before = '2026-10-31T23:59:59.500Z', context = setup(before,{ leaseMs: 1000 }), session = await context.create();
     await context.request(session.id); const first = await context.service.claimJob('first-worker'); context.clock.value = new Date(next);
     const second = await context.service.claimJob('retry-worker'); expect(second!.job.reservationSequence).toBe(2);
-    expect(await context.service.completeJob(first!,{ kind: 'assistant', model: 'fixture', message: 'Stale', actualUsd: 0 })).toBe(false);
-    await context.service.completeJob(second!,{ kind: 'assistant', model: 'fixture', message: 'Current', actualUsd: .02 });
+    expect(await completeFixtureJob(context.service, first!,{ kind: 'assistant', model: 'fixture', message: 'Stale', actualUsd: 0 })).toBe(false);
+    await completeFixtureJob(context.service, second!,{ kind: 'assistant', model: 'fixture', message: 'Current', actualUsd: .02 });
     const db = await context.store.read(); expect(db.ledger.find(entry => entry.operationId === `${first!.job.id}:1:uncertain`)?.budgetAt).toBe(before);
     expect(db.ledger.find(entry => entry.operationId === `${first!.job.id}:2:settle`)?.budgetAt).toBe(next);
     expect(totals(db.ledger,before).userDailyUsd).toBe(.08); expect(totals(db.ledger).userDailyUsd).toBeCloseTo(.02);
@@ -113,7 +116,7 @@ describe('atomic AI and speech quota admission across UTC boundaries', () => {
   it('retains correct cross-window accounting after Lab data deletion and recreation', async () => {
     const context = setup(prior,{ maxDailyUsd: .1 }); await boundarySettlement(context);
     const current = await context.create(); await context.request(current.id); const claim = await context.service.claimJob('current-worker');
-    await context.service.completeJob(claim!,{ kind: 'assistant', model: 'fixture', message: 'Current', actualUsd: .08 });
+    await completeFixtureJob(context.service, claim!,{ kind: 'assistant', model: 'fixture', message: 'Current', actualUsd: .08 });
     await context.service.deleteAccount('owner-a',{ requestId: randomUUID() }); expect(await context.service.listSessions('owner-a')).toEqual([]);
     const recreated = await context.create(); await expect(context.request(recreated.id)).rejects.toMatchObject({ code: 'quota' }); expect(totals((await context.store.read()).ledger).userDailyUsd).toBe(.08);
   });
@@ -130,7 +133,7 @@ describe('atomic AI and speech quota admission across UTC boundaries', () => {
   it('enforces shared monthly speech spend across days independently of the daily limit', async () => {
     const context = setup('2026-10-30T12:00:00.000Z'), session = await context.create();
     await context.request(session.id); const claim = await context.service.claimJob('fixture-worker');
-    await context.service.completeJob(claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Synthetic answer.', actualUsd: .08 });
+    await completeFixtureJob(context.service, claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Synthetic answer.', actualUsd: .08 });
     context.clock.value = new Date('2026-10-31T12:00:00.000Z');
     const config = { ...voiceConfig, userDailyUsd: 10, userMonthlyUsd: .1 };
     await voiceDebriefFixture(context.store,session.id);
