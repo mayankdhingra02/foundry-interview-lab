@@ -17,3 +17,7 @@ Requests set `store:false`, use a 40-second deadline and carry no product/accoun
 ## Verification boundary
 
 `tests/ai.test.ts` verifies role material separation, strict schemas, refusal/invalid-output handling, evidence/coverage checks, cost settlement and private diagnostics using mocked HTTP responses. It does not establish live quality, latency, provider access or learner benefit. `evals/` tracks the independent qualification work separately.
+
+## Best-effort input minimization
+
+Before a model request, recognizable API tokens, password-bearing database URLs and PEM private-key blocks are replaced with a marker. Evidence IDs and original private artifacts remain unchanged. This narrow scrubber cannot detect every secret or personal detail. Complete assistant file edits are blocked before inference when such material is found, since proposing replacements over a redacted file could silently erase it; the learner receives an actionable saved-work message.

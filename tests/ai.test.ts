@@ -40,6 +40,16 @@ describe('provider role and evidence boundary', () => {
     try { await assist(scenario, session, { mode: 'edit', prompt: 'Fix it' }); throw new Error('expected rejection'); }
     catch (error) { expect(error).toBeInstanceOf(ProviderFailure); expect((error as ProviderFailure).inference!.usd).toBeGreaterThan(0); }
   });
+  it('scrubs recognizable secrets from explanations and blocks complete file edits over redacted material', async () => {
+    const secret = 'sk-proj-' + 'x'.repeat(30);
+    session.files['quote.py'] += `\nKEY='${secret}'\n`;
+    respond({ message: 'Inspect the function.', files: [] });
+    await assist(scenario, session, { mode: 'ask', prompt: 'Explain' });
+    expect(fetchMock.mock.calls[0][1].body).not.toContain(secret);
+    fetchMock.mockClear();
+    await expect(assist(scenario, session, { mode: 'edit', prompt: 'Fix' })).rejects.toMatchObject({ category: 'privacy_input', mayHaveBilled: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it('falls back to authored coverage when a model cites invented evidence', async () => {
     respond({ action: 'ask_probe', question: 'Why did this pass?', competencyId: scenario.rubric[0].id, probeId: scenario.probes[0].id, evidenceIds: ['invented'] });
     const result = await interview(scenario, session);
