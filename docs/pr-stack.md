@@ -1,8 +1,10 @@
-# Pull request review order
+# Pull request history and original dependencies
 
-The implementation is a dependency stack. Each PR targets the previous implementation branch; review from the smallest number upward. `main` remains the planning baseline and no PR has been merged by this task. Review the full inherited stack, update bases after merges and rerun required checks on the final merge candidate. A top-branch CI pass does not replace individual review or release approval.
+At the owner's explicit request, PRs #1–70 were merged into `main` in ascending order using merge commits. Every successor was retargeted to `main` after its predecessor merged; all original heads and merge parents were checked. Implementation merge `e7b980c9ffdb` has the same source tree as the qualified final stacked head `a3ca858`. Exact-main CI remains a separate check.
 
-| PR | Change | Base branch |
+The base names below record the original stack before the authorized retargeting; GitHub now records each merged PR against `main`. Historical failed and superseded checks retain their original scope. A later aggregate pass does not turn an earlier failure into a pass.
+
+| PR | Change | Original base branch |
 | --- | --- | --- |
 | [#1](https://github.com/mayankdhingra02/foundry-interview-lab/pull/1) | Add application foundation and private identity boundary | `main` |
 | [#2](https://github.com/mayankdhingra02/foundry-interview-lab/pull/2) | Implement transactional sessions and frozen evidence | `codex/application-foundation` |
@@ -73,5 +75,6 @@ The implementation is a dependency stack. Each PR targets the previous implement
 | [#67](https://github.com/mayankdhingra02/foundry-interview-lab/pull/67) | Check dev advisory-chain isolation in both final images | `codex/private-role-evaluation` |
 | [#68](https://github.com/mayankdhingra02/foundry-interview-lab/pull/68) | Respect report publication chronology in retest measurement | `codex/final-image-dependency-isolation` |
 | [#69](https://github.com/mayankdhingra02/foundry-interview-lab/pull/69) | Record design acceptance, delivery evidence and review handoff | `codex/retest-measurement-chronology` |
+| [#70](https://github.com/mayankdhingra02/foundry-interview-lab/pull/70) | Record public-source CI and evaluation boundaries | `codex/final-acceptance-handoff` |
 
-This table records the published focused implementation and handoff stack through PR #69. The public-repository documentation follow-up is a separate change based on #69; its own PR identifies the dependency. See [delivery status](delivery-status.md) for exact-head evidence, [CI](ci.md#public-repository-and-actions-scope) for public-source boundaries, and [design acceptance](design-acceptance.md) for external gates. Content approval, model/expert qualification and application deployment remain open.
+This record covers the 70 implementation and handoff PRs. The post-merge documentation update is a separate focused PR based on `main`; its own PR records the authorized merge and exact-head checks. See [delivery status](delivery-status.md), [public-source scope](ci.md#public-repository-and-actions-scope) and [design acceptance](design-acceptance.md). Application deployment, content approval, independent AI/security/accessibility review and the learner pilot remain open.
