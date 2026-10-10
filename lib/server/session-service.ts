@@ -136,7 +136,11 @@ export class SessionService {
     return this.mutate(ownerId, input.requestId, 'command', { action: input.action }, id, (db, now) => {
       const session = ownedSession(db.sessions, ownerId, id); assertRevision(session, input.expectedRevision);
       const scenario = this.scenario(session);
-      if (input.action === 'pause') { assertActive(session); session.lifecycle = 'paused'; appendEvent(session, 'session.paused', {}, input.requestId, now, 'learner'); }
+      if (input.action === 'pause') {
+        assertActive(session);
+        if (session.mode !== 'practice') throw new DomainError('conflict', 'Pausing is available in practice mode. Simulation keeps its selected help policy.');
+        session.lifecycle = 'paused'; appendEvent(session, 'session.paused', {}, input.requestId, now, 'learner');
+      }
       else if (input.action === 'resume') { if (session.lifecycle !== 'paused') throw new DomainError('conflict', 'This session is not paused.'); session.lifecycle = 'active'; appendEvent(session, 'session.resumed', {}, input.requestId, now, 'learner'); }
       else if (input.action === 'advance') {
         assertCoding(session);

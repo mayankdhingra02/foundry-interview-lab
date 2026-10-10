@@ -57,6 +57,16 @@ describe('deterministic session ownership and mutation contracts', () => {
     expect(results.filter(r => r.status === 'rejected')).toHaveLength(1);
     const events = await service.events('owner-a', session.id, 1); expect(events.map(e => e.sequence)).toEqual([2]);
   });
+  it('enforces practice-only pausing on the server without mutating a simulation attempt', async () => {
+    const service = serviceFor(), practice = await create(service);
+    const paused = await service.command('owner-a', practice.id, { ...mutation(practice.revision), action: 'pause' });
+    expect(paused.session.lifecycle).toBe('paused');
+    expect((await service.command('owner-a', practice.id, { ...mutation(paused.session.revision), action: 'resume' })).session.lifecycle).toBe('active');
+    const simulation = (await service.createSession('owner-a', { scenarioId: scenario.id, mode: 'simulation', requestId: request() })).session;
+    const before = await service.exportSession('owner-a', simulation.id);
+    await expect(service.command('owner-a', simulation.id, { ...mutation(simulation.revision), action: 'pause' })).rejects.toMatchObject({ code: 'conflict', status: 409 });
+    expect(await service.exportSession('owner-a', simulation.id)).toEqual(before);
+  });
   it('separates code freeze, debrief answers and final evidence freeze', async () => {
     const service = serviceFor(); let session = await create(service);
     session = (await service.command('owner-a', session.id, { ...mutation(session.revision), action: 'finish' })).session;
