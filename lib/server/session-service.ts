@@ -4,6 +4,7 @@ import { buildEvidence, freezeEvidence, validateInterviewProposal, validateRepor
 import { budgetTotals, reservationBudgetAt } from '../interview-practice/quota';
 import type { InferenceRecord, JobClaim, JobKind, JobResult, JobView, Mutation, PracticeDatabase, PracticeJob, Scenario, Session, SessionConfiguration, SessionView } from '../interview-practice/types';
 import type { PracticeStore } from './store';
+import { assertRequestNotErased, rememberErasedRequests } from './deleted-requests';
 
 export type SessionAdmissionContext = { ownerId: string; sessionId: string; scenarioId: string; scenarioVersion: string; requestId: string; now: string; database: PracticeDatabase };
 export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void> };
@@ -50,6 +51,7 @@ export class SessionService {
         if (existing.fingerprint !== fingerprint) throw new DomainError('conflict', 'This request key was already used for different input.');
         return existing.result as T;
       }
+      assertRequestNotErased(db, ownerId, requestId, fingerprint);
       const now = this.at(), result = await apply(db, now);
       db.requests[key] = { ownerId, requestId, fingerprint, result: structuredClone(result), createdAt: now, ...(sessionId ? { sessionId } : {}) };
       return result;
@@ -375,8 +377,9 @@ export class SessionService {
       if (job.state === 'queued') this.settle(db, session, job, now, 0, true);
       else if (job.state === 'running') this.settle(db, session, job, now);
     }
-    // The filesystem adapter embeds artifacts in one store. Its atomic rewrite erases them; inventory is empty.
-    db.deletions.push({ id: randomUUID(), ownerId, sessionId: id, createdAt: now, state: 'completed', objectKeys: [], completedAt: now });
+    // Preserve only request identities so a delayed cross-device replay cannot
+    // recreate erased work or debit another admission. The private copies go.
+    const erasedRequests: Array<{ requestId: string; fingerprint: string }> = [];
     delete db.sessions[id];
     if (db.reviews) {
       for (const field of ['cases','drafts','decisions','publications'] as const) for (const [key, record] of Object.entries(db.reviews[field])) if (record.sessionId === id && record.ownerId === ownerId) delete db.reviews[field][key];
@@ -384,8 +387,12 @@ export class SessionService {
     }
     for (const [key, request] of Object.entries(db.requests)) {
       const result = request.result as { session?: { id?: string }; sessionId?: string } | null;
-      if (request.ownerId === ownerId && (request.sessionId === id || result?.session?.id === id || result?.sessionId === id)) delete db.requests[key];
+      if (request.ownerId === ownerId && (request.sessionId === id || result?.session?.id === id || result?.sessionId === id)) {
+        erasedRequests.push({ requestId: request.requestId, fingerprint: request.fingerprint });
+        delete db.requests[key];
+      }
     }
+    rememberErasedRequests(db, ownerId, id, erasedRequests, now);
     // Content-free usage postings stay until the quota window ends; deleting practice content must not reset spend caps.
   }
   async deleteSession(ownerId: string, id: string, input: { requestId: string }) {
@@ -393,7 +400,17 @@ export class SessionService {
   }
   async deleteAccount(ownerId: string, input: { requestId: string }) {
     return this.mutate(ownerId, input.requestId, 'delete-account', {}, undefined, (db, now) => {
-      for (const session of Object.values(db.sessions).filter(s => s.ownerId === ownerId)) this.removeSession(db, ownerId, session.id, now);
+      const sessions = Object.values(db.sessions).filter(s => s.ownerId === ownerId);
+      const cached = Object.values(db.requests).filter(request => request.ownerId === ownerId);
+      if (!sessions.length && cached.every(request => request.result && typeof request.result === 'object' && Object.keys(request.result).length === 1 && (request.result as { deleted?: unknown }).deleted === true)) {
+        // Keep old harmless acknowledgments rather than manufacturing a new
+        // tombstone on each no-op. Actual content erasure never hits this cap.
+        if (cached.length >= 50) throw new DomainError('quota', 'Lab content is already erased. The bounded deletion acknowledgment history must expire before another no-op deletion.');
+        return { deleted: true as const };
+      }
+      for (const session of sessions) this.removeSession(db, ownerId, session.id, now);
+      const remaining = Object.values(db.requests).filter(request => request.ownerId === ownerId);
+      if (remaining.length) rememberErasedRequests(db, ownerId, randomUUID(), remaining, now);
       for (const [key, request] of Object.entries(db.requests)) if (request.ownerId === ownerId) delete db.requests[key];
       // This operation erases Lab content, while preserving the shared account.
       // Content-free quota postings must survive so deletion cannot reset provider-spend caps.

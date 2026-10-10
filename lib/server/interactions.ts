@@ -2,6 +2,7 @@ import { appendEvent, assertActive, assertRequestId, assertRevision, digest, Dom
 import type { Mutation, SessionView } from '../interview-practice/types';
 import type { PracticeStore } from './store';
 import { sessionView } from './session-service';
+import { assertRequestNotErased } from './deleted-requests';
 
 export type InteractionAction = 'working' | 'repeat' | 'clarify';
 export type ClarificationTopic = 'requirements' | 'assistance' | 'timing';
@@ -20,12 +21,13 @@ export class InteractionService {
     const topic = input.action === 'clarify' ? input.topic ?? 'requirements' : undefined;
     const fingerprint = digest({ operation: 'interview-interaction', sessionId, action: input.action, topic: topic ?? null });
     return this.store.transaction(db => {
-      const session = ownedSession(db.sessions, ownerId, sessionId);
       const key = requestKey(ownerId, input.requestId), prior = db.requests[key];
       if (prior) {
         if (prior.fingerprint !== fingerprint) throw new DomainError('conflict', 'This request key was already used for different input.');
         return structuredClone(prior.result) as InteractionResult;
       }
+      assertRequestNotErased(db, ownerId, input.requestId, fingerprint);
+      const session = ownedSession(db.sessions, ownerId, sessionId);
       assertRevision(session, input.expectedRevision); assertActive(session);
       if (session.frozenEvidence) throw new DomainError('conflict', 'Final submission has closed interview controls.');
       if (session.events.filter(event => event.type === 'interview.interaction').length >= 100) throw new DomainError('quota', 'This attempt has reached its interview-control limit. Saved instructions and questions remain available.');
