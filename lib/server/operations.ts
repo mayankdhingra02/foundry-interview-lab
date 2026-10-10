@@ -1,19 +1,15 @@
 import 'server-only';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
 import { runnerHealth } from '../runtime/runner';
 import { configuredRuntimeBinding, DEFAULT_SCENARIO_IMAGE } from '../runtime/binding';
 import { authMode, enabled } from './config';
 import { readinessSchemaQuery, readinessTableNames, schemaCapabilitiesReady, type ReadinessFeatures, type SchemaCapability } from './readiness-schema';
+import { getPracticeDatabasePool } from './database-pool';
 
 type Query = Pick<Pool, 'query'>;
 const exec = promisify(execFile);
-let operationsPool: Pool | undefined;
-function pool(): Pool | null {
-  if (!process.env.DATABASE_URL) return null;
-  return operationsPool ??= new Pool({ connectionString: process.env.DATABASE_URL, max: 2, connectionTimeoutMillis: 2_000, statement_timeout: 2_000, idleTimeoutMillis: 10_000 });
-}
 const executionEnabled = () => process.env.FEATURE_EXECUTION !== 'false';
 export type Readiness = { status: 'ready' | 'not_ready'; service: 'foundry-interview-lab'; checks: { configuration: 'ok' | 'unconfigured'; storage: 'ok' | 'unavailable' | 'unconfigured'; schema: 'ok' | 'missing' | 'not_checked'; worker: 'ok' | 'stale' | 'not_checked'; execution: 'ok' | 'blocked' | 'unavailable' | 'disabled' | 'not_checked' }; checkedAt: string };
 
@@ -28,13 +24,15 @@ export async function setExecutionAdmission(db: Query, blocked: boolean, reason:
 }
 export async function executionAdmissionOpen(): Promise<boolean> {
   if (!runnerHealth().admitting) return false;
-  const db = pool();
-  if (!db) return process.env.NODE_ENV !== 'production';
-  try { return (await db.query<{ blocked: boolean }>("select blocked from public.practice_operations_state where key='execution_admission'")).rows[0]?.blocked === false; }
+  try {
+    const db = getPracticeDatabasePool();
+    if (!db) return process.env.NODE_ENV !== 'production';
+    return (await db.query<{ blocked: boolean }>("select blocked from public.practice_operations_state where key='execution_admission'")).rows[0]?.blocked === false;
+  }
   catch { return false; }
 }
 export async function blockExecutionAdmission(): Promise<void> {
-  const db = pool();
+  const db = getPracticeDatabasePool();
   if (!db) return;
   await setExecutionAdmission(db, true, 'cleanup_unconfirmed');
 }
@@ -64,7 +62,10 @@ export async function readiness(): Promise<Readiness> {
   if (authMode() === 'local' && (process.env.SESSION_SECRET?.length ?? 0) < 32) configurationReady = false;
   try { new URL(process.env.APP_URL || (process.env.NODE_ENV !== 'production' ? 'http://127.0.0.1:3000' : '')); }
   catch { configurationReady = false; }
-  return probeReadiness(pool(), { executionRequired: executionEnabled(), configurationReady, requiredFeatures: { voice: enabled('FEATURE_VOICE'), billing: enabled('FEATURE_BILLING'), reviews: Boolean(process.env.ADMIN_USER_IDS?.trim()) } });
+  let db: Pool | null;
+  try { db = getPracticeDatabasePool(); }
+  catch { return probeReadiness(null, { executionRequired: executionEnabled(), configurationReady: false }); }
+  return probeReadiness(db, { executionRequired: executionEnabled(), configurationReady, requiredFeatures: { voice: enabled('FEATURE_VOICE'), billing: enabled('FEATURE_BILLING'), reviews: Boolean(process.env.ADMIN_USER_IDS?.trim()) } });
 }
 
 /** Restricted operational counters. Never expose this response as learner-facing health. */
@@ -85,7 +86,7 @@ async function probeDocker(): Promise<boolean> {
 
 /** Start once per worker process, with the same stable ID used for job claims. */
 export async function startWorkerHeartbeat(workerId: string): Promise<() => Promise<void>> {
-  const db = pool();
+  const db = getPracticeDatabasePool();
   if (!db) return async () => undefined;
   let stopping = false, inFlight: Promise<void> | undefined;
   const beat = () => inFlight ??= (async () => {

@@ -8,14 +8,16 @@ import { configuredInferenceBinding } from '../ai/binding';
 import { getBillingService } from '../billing/application';
 import { rolloutAdmissionPolicy } from './rollout';
 import { admissionLimitsFromEnvironment } from '../interview-practice/admission';
+import { getPracticeDatabasePool } from './database-pool';
 
 let service: Promise<SessionService> | undefined;
 export function getService(): Promise<SessionService> {
   service ??= (async () => {
     let store;
-    if (process.env.DATABASE_URL) {
+    const pool = getPracticeDatabasePool();
+    if (pool) {
       const { PostgresPracticeStore } = await import('./postgres-store');
-      store = new PostgresPracticeStore(process.env.DATABASE_URL);
+      store = new PostgresPracticeStore(pool);
     } else {
       if (process.env.NODE_ENV === 'production') throw new HttpError(503, 'storage_unconfigured', 'Hosted practice requires PostgreSQL. Local file storage is development-only.');
       const path = process.env.PRACTICE_DATA_PATH || './data/practice.json';

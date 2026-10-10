@@ -20,6 +20,8 @@ await store.close(); // ends an internally created pool, not a caller-owned pool
 
 The constructor accepts `Pool | string`. The URL form creates a pool with five connections and a five-second connection timeout. The application and worker must use the same database and advisory lock key. All options are positive integers. Keep provider calls, learner execution, and other external I/O outside transaction callbacks; the service reserves a job first and a worker commits its eventual result separately.
 
+The standalone application now lends the store its shared practice/readiness pool, with a default maximum of five and a strict optional `PRACTICE_DATABASE_POOL_MAX` of 1–5. Caller-owned pools are still closed by their owner. See [database composition and shutdown](database-pool.md) for the explicit max-one composition primitive, timeout behavior and per-process limits; billing remains separate.
+
 Apply migrations in order through the project's controlled migration process:
 
 1. `supabase/migrations/202610090001_ai_practice_foundation.sql`

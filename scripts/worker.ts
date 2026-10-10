@@ -4,15 +4,17 @@ import { processOneJob } from '../lib/server/worker';
 import { getBillingService } from '../lib/billing/application';
 import { randomUUID } from 'node:crypto';
 import { startWorkerHeartbeat } from '../lib/server/operations';
+import { closePracticeDatabasePool } from '../lib/server/database-pool';
 
 let stopped = false;
 process.once('SIGINT', () => { stopped = true; });
 process.once('SIGTERM', () => { stopped = true; });
-const service = await getService();
-const billing = getBillingService(), workerId = process.env.WORKER_ID || `worker-${randomUUID()}`;
-const stopHeartbeat = await startWorkerHeartbeat(workerId);
-console.log(JSON.stringify({ event: 'worker.started', pid: process.pid }));
+let stopHeartbeat: (() => Promise<void>) | undefined;
 try {
+  const service = await getService();
+  const billing = getBillingService(), workerId = process.env.WORKER_ID || `worker-${randomUUID()}`;
+  stopHeartbeat = await startWorkerHeartbeat(workerId);
+  console.log(JSON.stringify({ event: 'worker.started', pid: process.pid }));
   while (!stopped) {
     try {
       const commerce = billing ? await billing.processNextWebhook(workerId) : false;
@@ -21,4 +23,7 @@ try {
     }
     catch { console.error(JSON.stringify({ event: 'worker.iteration.failed' })); await delay(2000); }
   }
-} finally { await stopHeartbeat(); }
+} finally {
+  try { await stopHeartbeat?.(); }
+  finally { await closePracticeDatabasePool(); }
+}
