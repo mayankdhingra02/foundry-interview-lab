@@ -31,5 +31,6 @@ evals/fixtures/*
 !evals/fixtures/baseline-summary.json
 scripts/evaluate.ts
 scripts/benchmark-models.ts
+scripts/review-role-models.ts
 tests
 .DS_Store

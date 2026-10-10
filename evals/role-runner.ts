@@ -25,7 +25,8 @@ export const roleRunSchema = z.object({
   entries: z.array(z.object({ caseId: z.string().min(1), role: roleSchema, contextDigest: hash, state: z.enum(['reserved', 'validated', 'rejected', 'uncertain']), reservedUsd: finiteUsd, knownUsd: finiteUsd, uncertainUsd: finiteUsd, failure: z.enum(['provider-or-validation', 'missing-provenance', 'cost-bound-exceeded']).nullable(), inference: inferenceSchema.nullable(), output: outputSchema.nullable() }).strict()).max(300)
 }).strict();
 export type RoleRun = z.infer<typeof roleRunSchema>;
-type RoleTask = { attempt: BenchmarkAttempt; role: EvaluationRole; session: Session; input: { mode: 'ask' | 'plan' | 'edit'; prompt: string } | null; contextDigest: string; reservedUsd: number };
+type RoleContextTask = { attempt: BenchmarkAttempt; role: EvaluationRole; session: Session; input: { mode: 'ask' | 'plan' | 'edit'; prompt: string } | null; contextDigest: string };
+type RoleTask = RoleContextTask & { reservedUsd: number };
 export type RoleExecutor = (task: RoleTask) => Promise<JobResult>;
 const providerRole = (role: EvaluationRole): AiRole => role.startsWith('assistant-') ? 'assistant' : role as 'interviewer' | 'coach';
 const planDigest = (version: string, planned: RoleRun['planned']) => digest({ version, planned: planned.map(({ reservedUsd, ...context }) => { void reservedUsd; return context; }) });
@@ -35,11 +36,11 @@ const assistantRequests = {
   edit: 'Propose a minimal change to the existing implementation that addresses a stated requirement. Explain the change and checks to run. Do not claim execution.'
 } as const;
 
-export function createRolePlan(version: string, attempts: BenchmarkAttempt[], roles: EvaluationRole[] = [...EVALUATION_ROLES]) {
+/** Reconstruct authored contexts without provider settings, prices or side effects. */
+export function createRoleContexts(version: string, attempts: BenchmarkAttempt[], roles: EvaluationRole[] = [...EVALUATION_ROLES]) {
   if (!version.trim() || !attempts.length || attempts.length > 60 || new Set(attempts.map(row => row.recipe.id)).size !== attempts.length) throw new Error('Select one to sixty distinct benchmark attempts.');
   if (!roles.length || new Set(roles).size !== roles.length || roles.some(role => !roleSchema.safeParse(role).success)) throw new Error('Select distinct supported evaluation roles.');
-  const policy = modelPolicy(), reservations = inferenceReservations();
-  const tasks: RoleTask[] = attempts.flatMap(attempt => roles.map(role => {
+  const tasks: RoleContextTask[] = attempts.flatMap(attempt => roles.map(role => {
     const session = structuredClone(attempt.session);
     let input: RoleTask['input'] = null;
     if (role.startsWith('assistant-')) {
@@ -48,9 +49,16 @@ export function createRolePlan(version: string, attempts: BenchmarkAttempt[], ro
       session.codeFrozenSnapshotId = null; session.frozenEvidence = null;
       input = { mode, prompt: assistantRequests[mode] };
     }
-    return { attempt, role, session, input, contextDigest: digest({ attempt: attemptContextDigest(attempt), role, stageId: session.stageId, workspace: digest(session.files), input }), reservedUsd: reservations[providerRole(role)] };
+    return { attempt, role, session, input, contextDigest: digest({ attempt: attemptContextDigest(attempt), role, stageId: session.stageId, workspace: digest(session.files), input }) };
   }));
-  const planned = tasks.map(({ attempt, role, contextDigest, reservedUsd }) => ({ caseId: attempt.recipe.id, role, contextDigest, reservedUsd, scenarioId: attempt.scenario.id, scenarioVersion: attempt.scenario.version, scenarioDigest: attempt.session.scenarioDigest, rubricVersion: attempt.scenario.version, evidenceDigest: attempt.session.frozenEvidence!.digest, runtimeDigests: [...new Set(attempt.session.runs.map(run => run.runtimeDigest ?? null))] }));
+  const contexts = tasks.map(({ attempt, role, contextDigest }) => ({ caseId: attempt.recipe.id, role, contextDigest, scenarioId: attempt.scenario.id, scenarioVersion: attempt.scenario.version, scenarioDigest: attempt.session.scenarioDigest, rubricVersion: attempt.scenario.version, evidenceDigest: attempt.session.frozenEvidence!.digest, runtimeDigests: [...new Set(attempt.session.runs.map(run => run.runtimeDigest ?? null))] }));
+  return { tasks, contexts };
+}
+
+export function createRolePlan(version: string, attempts: BenchmarkAttempt[], roles: EvaluationRole[] = [...EVALUATION_ROLES]) {
+  const context = createRoleContexts(version, attempts, roles), policy = modelPolicy(), reservations = inferenceReservations();
+  const tasks = context.tasks.map(task => ({ ...task, reservedUsd: reservations[providerRole(task.role)] }));
+  const planned = context.contexts.map(row => ({ ...row, reservedUsd: reservations[providerRole(row.role)] }));
   const benchmarkDigest = planDigest(version, planned);
   return { policy, tasks, planned, benchmarkDigest, estimatedUpperUsd: planned.reduce((total, row) => total + row.reservedUsd, 0) };
 }
@@ -113,7 +121,7 @@ export async function recordRoleRun(version: string, attempts: BenchmarkAttempt[
   return run;
 }
 
-function checkedRun(value: unknown): RoleRun {
+export function validateRoleRun(value: unknown): RoleRun {
   const run = roleRunSchema.parse(value);
   const key = (row: { caseId: string; role: string }) => `${row.caseId}:${row.role}`;
   const planned = new Map(run.planned.map(row => [key(row), row]));
@@ -133,14 +141,14 @@ function checkedRun(value: unknown): RoleRun {
 }
 
 export function roleReviewTemplate(value: unknown) {
-  const run = checkedRun(value);
+  const run = validateRoleRun(value);
   return { version: 1, runId: run.runId, benchmarkVersion: run.benchmarkVersion, benchmarkDigest: run.benchmarkDigest, provenance: 'human-review-required', cases: run.entries.filter(entry => entry.state === 'validated').map(entry => ({ caseId: entry.caseId, role: entry.role, candidateDigest: digest(entry), reviews: [], adjudication: null })) };
 }
 
 /** Comparison reports recorded coverage/cost/latency only; expert quality is pending. */
 export function compareRoleRuns(values: unknown[]) {
   if (!values.length) throw new Error('Supply at least one recorded model run.');
-  const runs = values.map(checkedRun);
+  const runs = values.map(validateRoleRun);
   if (new Set(runs.map(run => run.runId)).size !== runs.length) throw new Error('A model run cannot be counted twice.');
   if (runs.some(run => run.benchmarkDigest !== runs[0].benchmarkDigest || run.benchmarkVersion !== runs[0].benchmarkVersion || run.promptVersion !== runs[0].promptVersion)) throw new Error('Compare the same benchmark contexts and prompt version.');
   return { benchmarkVersion: runs[0].benchmarkVersion, benchmarkDigest: runs[0].benchmarkDigest, corpus: 'development-regression', quality: 'pending-independent-human-review', rows: runs.flatMap(run => EVALUATION_ROLES.filter(role => run.planned.some(row => row.role === role)).map(role => {
