@@ -20,6 +20,8 @@ The catalog offers an actual **Task level** filter. Opening a task displays its 
 
 ## Prerequisites and navigation
 
+The [original five tasks also have version-bound preparation guidance](baseline-prerequisites.md), projected into catalog/setup and progression without changing their immutable packages or saved attempts. These sidecars remain editorial drafts and use the same reviewed lesson mappings and nonblocking preparation semantics.
+
 New manifests carry optional `familyId` and `curriculum` metadata:
 
 ```ts

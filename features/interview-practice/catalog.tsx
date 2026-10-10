@@ -39,12 +39,12 @@ export function PracticeCatalog() {
 }
 
 function ScenarioPreparation({ scenario, expanded = false }: { scenario: PublicScenario; expanded?: boolean }) {
-  if (!scenario.curriculum) return null;
+  const prerequisites = scenario.curriculum?.prerequisites ?? scenario.preparation?.prerequisites;
+  if (!prerequisites) return null;
   return <details className="scenario-prerequisites" open={expanded || undefined}>
     <summary>Requirements and prerequisites</summary>
-    <p>Original {scenario.curriculum.tier} draft. Expert difficulty calibration and learner pilot are pending. Same-family variants are repeated-domain practice.</p>
-    <h3>Task constraints</h3><ul>{scenario.curriculum.constraints.map((constraint) => <li key={constraint}>{constraint}</li>)}</ul>
-    <h3>Suggested prerequisites</h3><ul>{scenario.curriculum.prerequisites.map((item) => <li key={item.id}><strong>{item.title}.</strong> {item.description}{item.lesson && <span> Review the related Foundry lesson from your study plan when Foundry navigation is available.</span>}</li>)}</ul>
+    {scenario.curriculum ? <><p>Original {scenario.curriculum.tier} draft. Expert difficulty calibration and learner pilot are pending. Same-family variants are repeated-domain practice.</p><h3>Task constraints</h3><ul>{scenario.curriculum.constraints.map((constraint) => <li key={constraint}>{constraint}</li>)}</ul></> : <p>Suggested preparation for this published task version. Expert content review and learner pilot are pending.</p>}
+    <h3>Suggested prerequisites</h3><ul>{prerequisites.map((item) => <li key={item.id}><strong>{item.title}.</strong> {item.description}{item.lesson && <span> Review the related Foundry lesson from your study plan when Foundry navigation is available.</span>}</li>)}</ul>
     <p>Prerequisites guide preparation. They do not assert mastery or block access.</p>
   </details>;
 }

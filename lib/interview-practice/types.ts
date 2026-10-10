@@ -1,7 +1,7 @@
 import type { PracticeEvent } from './events';
 import type { LearnerCheckBinding } from './check-policy';
 import type { PracticeSetupConditions } from './timing';
-import type { ScenarioCurriculum } from './curriculum';
+import type { ScenarioCurriculum, ScenarioPreparation } from './curriculum';
 export type { EventType, PracticeEvent } from './events';
 
 export type PracticeMode = 'practice' | 'simulation';
@@ -22,6 +22,7 @@ export type Scenario = {
 // Public test metadata is useful to the learner. Private test source and solutions are never exposed.
 export type PublicScenario = Omit<Scenario, 'referenceFiles' | 'tests' | 'probes' | 'hints'> & {
   tests: Array<Omit<ScenarioTest, 'source'> & { source?: string }>;
+  preparation?: ScenarioPreparation;
 };
 export type SessionConfiguration = { role: string; level: string; skills: string[]; targetMinutes: number; aiHelp: boolean; accommodations: string[]; voice?: boolean; practiceConditions?: PracticeSetupConditions; originalTargetMinutes?: number };
 export type Snapshot = { id: string; sequence: number; createdAt: string; sha256: string; files: Record<string, string> };
