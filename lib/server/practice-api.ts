@@ -12,6 +12,8 @@ import { handleVoiceRequest } from '../voice/api';
 import { executionAdmissionOpen } from './operations';
 import { ownerReviews, ownerReviewConsent } from './review-api';
 import { getReviewService } from './review-service';
+import { InteractionService } from './interactions';
+import type { SessionMutationResult } from './session-service';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
@@ -74,11 +76,12 @@ export async function practiceApi(request: Request, path: string[]) {
       return privateJson({ session, reviews }, 200, { 'Content-Disposition': `attachment; filename="practice-${id}.json"` });
     }
     if (!['POST', 'PUT'].includes(method)) throw new HttpError(404, 'not_found', 'Endpoint not found.');
-    const body = await readJson(request, operation === 'workspace' ? 300_000 : 20_000);
-    let result;
+    const body = await readJson(request, operation === 'workspace' ? 300_000 : operation === 'interaction' ? 2000 : 20_000);
+    let result: SessionMutationResult;
     if (method === 'PUT' && operation === 'workspace') result = await service.saveWorkspace(actor.id, id, parsed(mutation.extend({ files: z.record(z.string().max(64_000)) }), body));
     else if (method === 'POST' && operation === 'commands') result = await service.command(actor.id, id, parsed(mutation.extend({ action: z.enum(['advance', 'pause', 'resume', 'finish', 'submit']) }), body));
     else if (method === 'POST' && operation === 'turns') result = await service.commitTurn(actor.id, id, parsed(mutation.extend({ text: z.string().min(1).max(6000), source: z.enum(['typed', 'transcribed', 'corrected']).optional(), replyTo: z.string().optional() }), body));
+    else if (method === 'POST' && operation === 'interaction') result = await new InteractionService(service.store).interact(actor.id, id, parsed(mutation.extend({ action: z.enum(['working', 'repeat', 'clarify']), topic: z.enum(['requirements', 'assistance', 'timing']).optional() }).strict(), body));
     else if (method === 'POST' && operation === 'runs') {
       if (!capabilities().runner || !await executionAdmissionOpen()) throw new HttpError(503, 'runner_unavailable', 'Execution is unavailable or on an operational hold. Your work is saved.');
       result = await service.requestRun(actor.id, id, parsed(mutation, body));

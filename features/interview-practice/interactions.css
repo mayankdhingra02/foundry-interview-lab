@@ -1,0 +1,4 @@
+.interview-controls { flex: none; padding: 0 18px 16px; }
+.interview-controls .task-actions { flex-direction: row; flex-wrap: wrap; margin: 14px 0; }
+.interview-controls summary { color: var(--muted); font-size: 12px; cursor: pointer; }
+.interview-control-response { white-space: pre-wrap; margin: 14px 0 0; border: 1px solid var(--line); }

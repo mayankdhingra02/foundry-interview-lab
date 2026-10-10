@@ -1,0 +1,40 @@
+import { expect, test } from '@playwright/test';
+
+test('working and clarification survive refresh without being submitted as answers', async ({ page }, testInfo) => {
+  await page.goto('/interview-practice');
+  await page.getByRole('button', { name: 'Set up practice', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Start session', exact: true }).click();
+  await page.waitForURL(/\/interview-practice\/[^/?]+$/);
+  const sessionId = new URL(page.url()).pathname.split('/').at(-1)!;
+  const controls = page.getByRole('region', { name: 'Interview controls' });
+  await expect(controls.getByRole('button', { name: 'Repeat question', exact: true })).toBeDisabled();
+  await expect(page.getByLabel('Message to interviewer', { exact: true })).toHaveCount(0);
+  const keys: string[] = [];
+  await page.route(`**/sessions/${sessionId}/interaction`, route => {
+    const body = route.request().postDataJSON();
+    if (body.action !== 'working') return route.continue();
+    keys.push(body.requestId);
+    return keys.length === 1 ? route.fulfill({ status: 503, json: { error: { message: 'Temporary test transport interruption.' } } }) : route.continue();
+  });
+  await controls.getByRole('button', { name: 'I’m working', exact: true }).click();
+  await expect(page.locator('.notice.error')).toContainText('Temporary test transport interruption.');
+  await controls.getByRole('button', { name: 'I’m working', exact: true }).click();
+  await expect(controls).toContainText('does not submit an answer or pause');
+  expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1]);
+  await page.reload();
+  await expect(controls).toContainText('does not submit an answer or pause');
+  const clarification = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/sessions/${sessionId}/interaction`) && response.request().postDataJSON().action === 'clarify');
+  await controls.getByRole('button', { name: 'Clarify requirements', exact: true }).click();
+  const acknowledged = await clarification; expect(acknowledged.ok()).toBe(true);
+  const current = await acknowledged.json();
+  await expect(controls).toContainText(current.session.scenario.summary);
+  expect(current.session.turns).toEqual([]); expect(current.session.jobs).toEqual([]);
+  expect(current.session.events.filter((event: { type: string }) => event.type === 'interview.interaction')).toHaveLength(2);
+  await controls.getByText('Timing and help policy', { exact: true }).click();
+  await controls.getByRole('button', { name: 'Explain timing', exact: true }).click();
+  await expect(controls).toContainText('does not automatically submit or grade');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('interview-controls-mobile.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.request.delete(`/api/interview-practice/sessions/${sessionId}`, { data: { requestId: crypto.randomUUID() }, headers: { origin: new URL(page.url()).origin } });
+});

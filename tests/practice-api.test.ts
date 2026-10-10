@@ -76,6 +76,15 @@ describe('authenticated practice HTTP contracts', () => {
     await api(`sessions/${session.id}`, 'DELETE', { requestId: requestId() });
     expect((await api(`reviews/${created.id}/consent`, 'POST', { requestId: requestId(), expectedRevision: 2, inspectionConsent: false, supportActionsConsent: false })).status).toBe(404);
   });
+  it('routes bounded owner interview controls without admitting inference or an answer', async () => {
+    const session = await create();
+    const body = { requestId: requestId(), expectedRevision: session.revision, action: 'clarify', topic: 'assistance' };
+    const response = await api(`sessions/${session.id}/interaction`, 'POST', body);
+    expect(response.status).toBe(200); const result = await response.json();
+    expect(result.response).toContain('coding assistant'); expect(result.session.jobs).toEqual([]); expect(result.session.turns).toEqual([]);
+    expect((await api(`sessions/${session.id}/interaction`, 'POST', body, {}, localIdentityCookie().cookie)).status).toBe(404);
+    expect((await api(`sessions/${session.id}/interaction`, 'POST', { ...body, requestId: requestId(), ownerId: 'forged' })).status).toBe(400);
+  });
   it('replays committed sequence IDs through SSE and closes on reader cancellation', async () => {
     const session = await create();
     const response = await api(`sessions/${session.id}/events`, 'GET', undefined, { accept: 'text/event-stream' });
