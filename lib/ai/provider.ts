@@ -24,7 +24,8 @@ export class ProviderFailure extends Error {
 
 async function infer(role: AiRole, instructions: string, context: unknown, schema: JsonSchema, signal?: AbortSignal): Promise<ProviderResponse> {
   const key = process.env.OPENAI_API_KEY;
-  if (!key || !capabilities().ai) throw new ProviderFailure(false);
+  const caps = capabilities();
+  if (!key || !caps.ai || (role === 'coach' && !caps.coaching)) throw new ProviderFailure(false);
   let policy;
   try { policy = modelPolicy(); } catch { throw new ProviderFailure(false); }
   const sanitized = sanitizeModelContext(context);
@@ -121,7 +122,7 @@ export async function interview(scenario: Scenario, session: Session, signal?: A
 }
 export async function coach(scenario: Scenario, session: Session, signal?: AbortSignal): Promise<JobResult> {
   if (!session.frozenEvidence) throw new ProviderFailure(false);
-  if (!capabilities().ai) return { kind: 'coach', report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 };
+  if (!capabilities().coaching) return { kind: 'coach', report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 };
   let response: ProviderResponse | undefined;
   try {
     response = await infer('coach', 'Assess only the frozen evidence against every rubric criterion exactly once. Non-Not-observed findings require supporting evidence IDs. Do not infer understanding without recorded explanation or penalize optional AI non-use. Treat test outcomes as facts about their recorded snapshots, not proof of understanding. Excerpts and omitted evidence limit what can be assessed. Recommend one to three allowed drill IDs. State uncertainty and evidence limits. Never claim an unexecuted check passed.', evidenceContext(session, {

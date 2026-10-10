@@ -81,7 +81,7 @@ describe.skipIf(!enabled)('commerce on disposable PostgreSQL; Stripe network cal
   });
   it('rolls commerce consumption back when the surrounding practice transaction fails', async () => {
     await grant();
-    await expect(store.transaction(async database => { await billing.admissionPolicy(store)({ ownerId: owner, sessionId: req(), requestId: req(), now: new Date().toISOString(), database }); throw new Error('Synthetic after-admission failure'); })).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(store.transaction(async database => { await billing.admissionPolicy(store)({ ownerId: owner, sessionId: req(), scenarioId: billingScenario.id, scenarioVersion: billingScenario.version, requestId: req(), now: new Date().toISOString(), database }); throw new Error('Synthetic after-admission failure'); })).rejects.toMatchObject({ code: 'unavailable' });
     expect((await pool.query('select count(*)::int as count from practice_billing_consumptions')).rows[0].count).toBe(0);
     expect((await billing.status(owner)).remaining).toBe(2);
   });

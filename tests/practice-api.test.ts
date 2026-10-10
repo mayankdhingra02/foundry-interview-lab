@@ -5,6 +5,7 @@ import { localIdentityCookie } from '../lib/server/auth';
 import { SessionService } from '../lib/server/session-service';
 import { MemoryPracticeStore } from '../lib/server/store';
 import { exportPracticeSession } from '../lib/server/export';
+import { rolloutAdmissionPolicy } from '../lib/server/rollout';
 
 let service: SessionService;
 vi.mock('../lib/server/application', () => ({ getService: () => Promise.resolve(service) }));
@@ -111,6 +112,24 @@ describe('authenticated practice HTTP contracts', () => {
     expect(plan.studyPlan.selectedCompetencies).toEqual(['retired-owner-criterion']);
     expect(plan.recommendations.some((item: { scenarioId: string }) => item.scenarioId.startsWith('retired-'))).toBe(false);
     expect((await api('progress?competency=retired-other-criterion')).status).toBe(400);
+  });
+  it('retires new catalog choices without blocking saved work or acknowledged creation replay', async () => {
+    vi.stubEnv('PRACTICE_ADMITTED_SCENARIOS', 'monetary-validation');
+    const billing = vi.fn(async () => {});
+    service = new SessionService(new MemoryPracticeStore(), getScenario, { admissionPolicy: rolloutAdmissionPolicy(billing) });
+    expect((await (await api('scenarios')).json()).scenarios.map((item: { id: string }) => item.id)).toEqual(['monetary-validation']);
+    const input = { scenarioId: 'monetary-validation', requestId: requestId() };
+    const saved = (await (await api('sessions', 'POST', input)).json()).session;
+    vi.stubEnv('PRACTICE_ADMITTED_SCENARIOS', '');
+    expect((await (await api('scenarios')).json()).scenarios).toEqual([]);
+    const progress = await (await api('progress?competency=money-correctness')).json();
+    expect(progress.recommendations).toEqual([]); expect(progress.details.attempts).toBe(1);
+    expect((await api(`sessions/${saved.id}`)).status).toBe(200);
+    expect((await api(`sessions/${saved.id}/workspace`, 'PUT', { expectedRevision: saved.revision, requestId: requestId(), files: saved.files })).status).toBe(200);
+    const replay = await api('sessions', 'POST', input); expect(replay.status).toBe(201); expect((await replay.json()).session.id).toBe(saved.id);
+    expect((await api('sessions', 'POST', { ...input, requestId: requestId() })).status).toBe(403);
+    expect(billing).toHaveBeenCalledTimes(1);
+    expect((await service.listSessions(ownerId))).toHaveLength(1);
   });
   it('replays committed sequence IDs through SSE and closes on reader cancellation', async () => {
     const session = await create();

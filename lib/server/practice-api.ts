@@ -15,6 +15,7 @@ import { getReviewService } from './review-service';
 import { InteractionService } from './interactions';
 import type { SessionMutationResult } from './session-service';
 import { buildProgression } from '../interview-practice/progression';
+import { admittedScenarios } from './rollout';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
@@ -30,7 +31,7 @@ export async function practiceApi(request: Request, path: string[]) {
   return handle(request, async () => {
     const method = request.method;
     if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return privateJson({ capabilities: capabilities() });
-    if (path.length === 1 && path[0] === 'scenarios' && method === 'GET') return privateJson({ scenarios: listScenarios().map(toPublicScenario), capabilities: capabilities() });
+    if (path.length === 1 && path[0] === 'scenarios' && method === 'GET') return privateJson({ scenarios: admittedScenarios(listScenarios()).map(toPublicScenario), capabilities: capabilities() });
     const actor = await requireActor(request), service = await getService();
     if (path[0] === 'reviews' && path[1] && path[2] === 'consent' && path.length === 3) return ownerReviewConsent(request, path[1]);
     if (path.length === 1 && path[0] === 'progress' && method === 'GET') {
@@ -39,7 +40,7 @@ export async function practiceApi(request: Request, path: string[]) {
       const goals = parsed(z.array(z.string().min(1).max(100)).max(20), new URL(request.url).searchParams.getAll('competency'));
       const known = new Set([...catalog, ...sessions.map(session => session.scenario)].flatMap(scenario => scenario.rubric.map(criterion => criterion.id)));
       if (goals.some(id => !known.has(id))) throw new HttpError(400, 'unknown_competency', 'Choose authored criteria from the catalog or your saved attempts.');
-      return privateJson(buildProgression(sessions, catalog, { selectedCompetencies: goals }));
+      return privateJson(buildProgression(sessions, admittedScenarios(catalog), { selectedCompetencies: goals }));
     }
     if (path[0] === 'sessions' && path.length === 1) {
       if (method === 'GET') return privateJson({ sessions: await service.listSessions(actor.id) });
