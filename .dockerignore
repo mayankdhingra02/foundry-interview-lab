@@ -30,5 +30,6 @@ evals/fixtures/*
 !evals/fixtures/human-review.template.json
 !evals/fixtures/baseline-summary.json
 scripts/evaluate.ts
+scripts/benchmark-models.ts
 tests
 .DS_Store
