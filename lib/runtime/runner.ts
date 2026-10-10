@@ -8,7 +8,7 @@ import { configuredRuntimeBinding, parseRuntimeBinding, runtimeBindingConfigured
 import { selectRunSuite } from '../interview-practice/learner-checks';
 import type { RunSelection } from '../interview-practice/check-policy';
 
-export type ExecuteOptions = { signal?: AbortSignal; includeProtected?: boolean; runtimeBinding?: RuntimeBinding; selection?: RunSelection };
+export type ExecuteOptions = { signal?: AbortSignal; includeProtected?: boolean; runtimeBinding?: RuntimeBinding; selection?: RunSelection; onProvision?: (durationMs: number, index: number) => void };
 type CommandResult = { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean; aborted: boolean; outputLimited: boolean; error?: string };
 type CommandOptions = { signal?: AbortSignal; timeoutMs: number; maxOutputBytes?: number; input?: string };
 type CheckResult = { id: string; status: TestObservation['status']; testsRun: number; detail: string };
@@ -216,11 +216,13 @@ export async function executeScenario(scenario: Scenario, files: Record<string, 
     let result: CommandResult | undefined;
     let managementFailure = false, cleanupConfirmed = false;
     try {
+      const provisionStarted = performance.now();
       const created = await command(buildDockerArguments(name, imageId, packageCopy.runtime.memoryMb), {
         signal: options.signal, timeoutMs: Math.min(MANAGEMENT_TIMEOUT, Math.max(1, deadline - Date.now())), maxOutputBytes: 4_000,
       });
       if (created.exitCode !== 0 || created.error || created.timedOut || created.aborted) { result = created; managementFailure = true; }
       else {
+        try { options.onProvision?.(performance.now() - provisionStarted, index); } catch { /* Diagnostics cannot change execution. */ }
         result = await command(['start', '--attach', '--interactive', name], {
           signal: options.signal,
           timeoutMs: Math.min(Math.max(1, Math.min(60, test.timeoutSeconds)) * 1_000, Math.max(1, deadline - Date.now())),

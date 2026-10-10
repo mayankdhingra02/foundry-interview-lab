@@ -10,17 +10,20 @@ import { digest } from '../interview-practice/domain';
 import { parseRuntimeBinding, type RuntimeBinding } from '../runtime/binding';
 import { admittedRunSuite } from '../interview-practice/learner-checks';
 import type { RunSelection } from '../interview-practice/check-policy';
+import { emitTelemetry, telemetryConfig } from './telemetry';
+import { isUnseenFocusedRetest } from '../interview-practice/telemetry-learning';
+import type { JobClaim } from '../interview-practice/types';
 
 class AdmittedInputMismatch extends Error {}
 class MissingRuntimeBinding extends Error {}
 
-async function executeAdmittedSnapshot(scenario: Scenario, files: Record<string, string>, signal: AbortSignal, runtimeBinding: RuntimeBinding, selection?: RunSelection): Promise<RunExecution> {
+async function executeAdmittedSnapshot(scenario: Scenario, files: Record<string, string>, signal: AbortSignal, runtimeBinding: RuntimeBinding, selection?: RunSelection, claim?: JobClaim): Promise<RunExecution> {
   if (!await executionAdmissionOpen()) return {
     status: 'infrastructure_error', command: 'execution admission', stdout: '',
     stderr: 'Execution is on an operational hold. Your work is saved; no code was executed.',
     exitCode: null, tests: [], durationMs: 0,
   };
-  try { return await executeScenario(scenario, files, { signal, includeProtected: true, runtimeBinding, ...(selection === 'learner' ? { selection } : {}) }); }
+  try { return await executeScenario(scenario, files, { signal, includeProtected: true, runtimeBinding, ...(selection === 'learner' ? { selection } : {}), ...(claim && telemetryConfig() ? { onProvision: (durationMs: number, index: number) => { emitTelemetry(claim.job.ownerId, claim.job.sessionId, `${claim.job.id}:provision:${index}`, { event: 'latency.measured', metric: 'sandbox.provision', durationMs, outcome: 'acknowledged', jobKind: 'run' }, { jobId: claim.job.id }); } } : {}) }); }
   finally {
     if (runnerHealth().blockedReason !== null) await blockExecutionAdmission().catch(() => {
       // Preserve genuine execution observations. Admission also fails closed when storage is unavailable.
@@ -32,6 +35,7 @@ async function executeAdmittedSnapshot(scenario: Scenario, files: Record<string,
 export async function processOneJob(service: SessionService, workerId = `worker-${randomUUID()}`): Promise<boolean> {
   const claim = await service.claimJob(workerId);
   if (!claim) return false;
+  emitTelemetry(claim.job.ownerId, claim.job.sessionId, `${claim.job.id}:queue:${claim.fencingToken}`, { event: 'latency.measured', metric: 'job.queue', durationMs: Date.now() - Date.parse(claim.job.createdAt), outcome: 'acknowledged', jobKind: claim.job.kind }, { jobId: claim.job.id });
   const controller = new AbortController();
   const heartbeat = setInterval(() => {
     service.heartbeatJob(claim).then(valid => { if (!valid) controller.abort(); }).catch(() => controller.abort());
@@ -59,14 +63,24 @@ export async function processOneJob(service: SessionService, workerId = `worker-
     const signal = controller.signal;
     externalWorkStarted = true;
     const result = claim.job.kind === 'run'
-      ? { kind: 'run' as const, run: await executeAdmittedSnapshot(scenario, snapshot.files, signal, runtimeBinding!, claim.job.input.selection === 'learner' ? 'learner' : undefined), actualUsd: 0 }
+      ? { kind: 'run' as const, run: await executeAdmittedSnapshot(scenario, snapshot.files, signal, runtimeBinding!, claim.job.input.selection === 'learner' ? 'learner' : undefined, claim), actualUsd: 0 }
       : claim.job.kind === 'interviewer' ? (claim.job.input.forceAuthored ? { kind: 'interviewer' as const, proposal: authoredQuestion(scenario, session), model: 'authored', actualUsd: 0 } : await interview(scenario, session, signal))
       : claim.job.kind === 'assistant' ? await assist(scenario, session, claim.job.input, signal)
       : claim.job.input.forceAuthored ? { kind: 'coach' as const, report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 } : await coach(scenario, session, signal);
-    await service.completeJob(claim, result);
+    const accepted = await service.completeJob(claim, result);
+    if (accepted) {
+      const metric = claim.job.kind === 'run' ? 'run.result' : claim.job.kind === 'coach' ? 'report.ready' : claim.job.kind === 'interviewer' ? 'text.turn' : null;
+      if (metric) emitTelemetry(claim.job.ownerId, claim.job.sessionId, `${claim.job.id}:result:${claim.fencingToken}`, { event: 'latency.measured', metric, durationMs: Date.now() - Date.parse(claim.job.createdAt), outcome: result.kind === 'run' && result.run.status !== 'completed' ? 'failed' : 'acknowledged', jobKind: claim.job.kind }, { jobId: claim.job.id });
+      if (claim.job.kind === 'coach' && telemetryConfig()) {
+        try {
+          const history = await service.listSessions(claim.job.ownerId), completed = history.find(row => row.id === claim.job.sessionId);
+          if (completed && isUnseenFocusedRetest(completed, history)) emitTelemetry(claim.job.ownerId, completed.id, `${claim.job.id}:unseen-retest`, { event: 'unseen-retest.completed', priorFocusedDrill: true, exposureBasis: 'saved-history-only' }, { jobId: claim.job.id });
+        } catch { /* Optional measurement reads cannot invalidate a completed report. */ }
+      }
+    }
   } catch (error) {
     const definitelyNotCalled = !externalWorkStarted || error instanceof ProviderFailure && !error.mayHaveBilled;
-    await service.failJob(claim, error instanceof MissingRuntimeBinding
+    const failed = await service.failJob(claim, error instanceof MissingRuntimeBinding
       ? 'This queued run predates immutable runtime admission or has an invalid binding. No execution started. Configure the reviewed image and explicitly request a new run.'
       : error instanceof AdmittedInputMismatch
       ? 'The admitted scenario or snapshot no longer matches its saved identity. No execution or inference started. Restore the original package before retrying.'
@@ -75,6 +89,8 @@ export async function processOneJob(service: SessionService, workerId = `worker-
       : controller.signal.aborted
       ? 'Operation interrupted or cancelled. The acknowledged attempt remains available.'
       : `${claim.job.kind === 'run' ? 'Code execution' : 'AI operation'} could not finish. Retry when the service is available.`, definitelyNotCalled ? 0 : error instanceof ProviderFailure ? error.inference?.usd : undefined, error instanceof ProviderFailure ? error.inference : undefined);
+    const metric = claim.job.kind === 'run' ? 'run.result' : claim.job.kind === 'coach' ? 'report.ready' : claim.job.kind === 'interviewer' ? 'text.turn' : null;
+    if (failed && metric) emitTelemetry(claim.job.ownerId, claim.job.sessionId, `${claim.job.id}:result:${claim.fencingToken}`, { event: 'latency.measured', metric, durationMs: Date.now() - Date.parse(claim.job.createdAt), outcome: controller.signal.aborted ? 'cancelled' : 'failed', jobKind: claim.job.kind }, { jobId: claim.job.id });
   } finally { clearInterval(heartbeat); }
   return true;
 }

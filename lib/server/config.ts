@@ -2,6 +2,7 @@ import { runnerHealth } from '../runtime/runner';
 import { modelPolicy } from '../ai/policy';
 import { billingConfigured } from '../billing/config';
 import { voiceAvailability } from '../voice/config';
+import { telemetryConfig } from './telemetry';
 
 export function enabled(name: string, fallback = false): boolean {
   const value = process.env[name];
@@ -26,7 +27,7 @@ export function capabilities() {
   const voice = voiceAvailability();
   return {
     ai, coaching, interviewer: ai, assistant: ai, runner, accounts: authMode() === 'supabase',
-    voice,
+    voice, telemetry: telemetryConfig() !== null,
     billing: billingConfigured(),
     authMode: authMode(),
     details: {
