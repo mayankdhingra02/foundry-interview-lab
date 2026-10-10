@@ -48,7 +48,7 @@ The operation preserves:
 
 Deleting an old attempt or its cleanup metadata does not erase current ledger entries. Current user daily/monthly USD totals, global daily USD totals, and daily admission counts retain their inputs. Saved session usage summaries are untouched. Ambiguous financial commitments require operator investigation; retention does not release them merely because they are old. This ledger is operational usage accounting, not the separate commerce/payment audit record.
 
-Deletion of a queued AI job can release its untouched reservation with a zero-cost settlement; that complete group can expire after both postings reach 62 days. Deletion of running positive-cost work records uncertainty, so its commitment remains retained. In-flight voice work stays reserved until its actual settlement callback; maintenance does not invent a successful provider outcome for deleted work.
+Deletion of a queued AI job can release its untouched reservation with a zero-cost settlement; that complete group can expire after both postings reach 62 days. Deletion of running positive-cost work records uncertainty, so its commitment remains retained. In-flight voice work stays reserved until a valid settlement callback or the separate [voice reconciliation](voice-reconciliation.md) path marks an expired reservation uncertain. That transition releases concurrency, retains cost/minutes and original budget attribution, and never invents a successful provider outcome or a refund for deleted work. Uncertain groups remain ineligible for ordinary retention.
 
 ## API and bounded execution
 

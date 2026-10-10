@@ -16,6 +16,8 @@ Question playback sends a stable interviewer turn ID. The server reads the corre
 
 ## Server integration
 
+Abandoned reservations have a conservative expiry and a separate [bounded reconciliation operation](voice-reconciliation.md). Recovery releases occupied request slots while retaining uncertain cost, minutes and original budget windows; expired callbacks cannot return audio or transcripts. This is independent from operational retention and does not reconcile invoices or refund possible provider charges.
+
 The authenticated practice dispatcher calls:
 
 ```ts
@@ -97,7 +99,7 @@ Deepgram's March 5, 2026 changelog says PAYG/Growth customers can opt in or out 
 
 `tests/e2e/voice-cancellation.spec.ts` controls delayed browser permission and audio conversion to check cancellation before capture, an old permission result arriving after a newer recording starts, and cancellation before upload. These synthetic browser races make no speech-provider or hardware qualification claim.
 
-`RUN_POSTGRES_INTEGRATION=1 npx vitest run tests/voice-postgres.integration.test.ts` creates a fresh local disposable Docker database, applies migrations 0001/0002/0004/0007/0008 and uses the actual service-role grants. It tests persisted voice choices, pre-debrief/text/legacy denial, cross-adapter atomic admission, ledger roundtrip, deletion-resistant counters and database metadata constraints. It never reads a hosted DATABASE_URL or calls Deepgram. The new selection/gating regression requires fresh CI qualification; no local Docker or live speech call was made for this change.
+`RUN_POSTGRES_INTEGRATION=1 npx vitest run tests/voice-postgres.integration.test.ts` creates a fresh local disposable Docker database, applies migrations 0001/0002/0004/0007/0008 and uses the actual service-role grants. It tests persisted voice choices, pre-debrief/text/legacy denial, cross-adapter atomic admission, ledger roundtrip, deletion-resistant counters and database metadata constraints. It never reads a hosted DATABASE_URL or calls Deepgram. The selection/gating regression passed in the disposable CI result recorded below; no shared local Docker or live speech call was made for this change.
 
 A LiveKit/full-duplex gateway, authenticated short-lived connection tickets, continuous STT, interruption-aware server turn detection, streaming TTS, reconnect reconciliation and coordinated cancellation remain a later workstream. There is no placeholder WebSocket endpoint or claim that press-to-talk implements those requirements.
 
@@ -113,4 +115,4 @@ All checked 2026-10-09. Paraphrases above are intentionally short.
 
 ## Subsequent disposable qualification
 
-[Run 37996251785](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37996251785), commit `43cdb3a`, passed all 47 PostgreSQL cases including persisted voice choice/default/legacy/stage guards. The full 74-browser-test suite passed with synthetic speech fixtures. Its load p95 missed at 1,118 ms and the separate evaluation-assets image build failed; those outcomes are preserved in [delivery status](delivery-status.md). These checks make no real speech-provider or hardware-quality claim. Later source fixes require fresh qualification after the account owner restores GitHub Actions availability.
+[Run 37996251785](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37996251785), commit `43cdb3a`, passed all 47 PostgreSQL cases including persisted voice choice/default/legacy/stage guards. The full 74-browser-test suite passed with synthetic speech fixtures. Its load p95 missed at 1,118 ms and the separate evaluation-assets image build failed; those outcomes are preserved in [delivery status](delivery-status.md). The subsequent account no-runner restriction is historical. Later focused repairs passed all four jobs, including [run 38006016302](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/38006016302), commit `275670f`. These disposable checks make no real speech-provider, microphone or chosen-deployment qualification claim. Any final merge candidate requires its own exact-head results.
