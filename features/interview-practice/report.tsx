@@ -14,7 +14,13 @@ export function ReportView({ session, telemetryEnabled = false, onEvidence, onDr
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const latestReport = session.reports.at(-1)!;
   const report = session.reports.find(item => item.id === selectedReportId) || latestReport;
-  useEffect(() => { telemetry.feedbackOpened(report.id); }, [report.id, telemetry, telemetryEnabled]);
+  useEffect(() => {
+    // Effect replay can disable telemetry and abort a request sent during setup.
+    // Wait for the committed setup to survive cleanup before marking it opened.
+    let active = true;
+    queueMicrotask(() => { if (active) telemetry.feedbackOpened(report.id); });
+    return () => { active = false; };
+  }, [report.id, telemetry, telemetryEnabled]);
   const [completed, setCompleted] = useState<string[]>((session as SessionView & { completedDrillIds?: string[] }).completedDrillIds || []);
   const [pending, setPending] = useState("");
   const [error, setError] = useState("");
