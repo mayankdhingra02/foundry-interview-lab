@@ -9,17 +9,18 @@ const reviewTables = ['ai_practice_review_cases','ai_practice_correction_drafts'
 type Row = Record<string, unknown> & { runtime_payload: unknown };
 type Preflight = { table_name: string; bytes: string; count: string };
 type Tagged = { table_name: string; entity: Row };
-type TransportOptions = { reviewReady?: boolean; limits?: PostgresStoreOptions; sizes?: (rows: Preflight[]) => Preflight[]; entities?: (rows: Tagged[]) => Tagged[] };
+type TransportOptions = { reviewReady?: boolean; limits?: PostgresStoreOptions; sizes?: (rows: Preflight[], call: number) => Preflight[]; entities?: (rows: Tagged[]) => Tagged[] };
 
 // A fake transport tests roundtrip count and fail-closed control flow, not SQL execution or latency.
 function transport(records: Record<string, Row[]> = {}, options: TransportOptions = {}) {
   const present = [...baselineTables, ...(options.reviewReady ? reviewTables : [])];
+  let preflightCalls = 0;
   const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
     void parameters;
     if (sql.includes('to_regclass')) return { rows: [{ table_name: options.reviewReady ? 'ai_practice_review_cases' : null }] };
     if (sql.includes('as bytes')) {
       const sizes = present.map(table => ({ table_name: table, bytes: String((records[table] ?? []).reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row.runtime_payload)), 0)), count: String((records[table] ?? []).length) }));
-      return { rows: options.sizes?.(sizes) ?? sizes };
+      return { rows: options.sizes?.(sizes, ++preflightCalls) ?? sizes };
     }
     if (sql.includes('to_jsonb(entity)')) {
       const rows = present.flatMap(table_name => (records[table_name] ?? []).map(entity => ({ table_name, entity: structuredClone(entity) })));
@@ -98,5 +99,27 @@ describe('batched PostgreSQL load transport and capacity preflight', () => {
     const sql = query.mock.calls.map(call => call[0]); expect(sql[0]).toBe('begin');
     expect(sql.findIndex(text => text.includes('pg_advisory_xact_lock'))).toBeLessThan(sql.findIndex(text => text.includes('as bytes')));
     expect(query.mock.calls.find(call => call[0].includes('pg_advisory_xact_lock'))?.[1]).toEqual([843_239_117]); expect(sql.at(-1)).toBe('commit');
+    expect(sql.filter(text => text.includes('as bytes'))).toHaveLength(2); // Load and pre-COMMIT use exactly the same metric.
+  });
+  it('rejects projected per-table growth before sending any entity write', async () => {
+    const { store, query } = transport({}, { limits: { maxEntityRows: 1 } });
+    await expect(store.transaction(db => { db.ledger = [0,1].map(index => ({ id: `row-${index}`, ownerId: owner, sessionId: 'session', operationId: `op-${index}`, kind: 'admission', amountUsd: 0, createdAt: '2026-10-09T12:00:00.000Z' })); })).rejects.toMatchObject({ code: 'unavailable' });
+    const sql = query.mock.calls.map(call => call[0]); expect(sql.some(text => /^(insert|delete|update) /i.test(text))).toBe(false);
+    expect(sql.at(-1)).toBe('rollback');
+  });
+  it.each(['bytes','count'] as const)('rolls back when the exact persisted %s metric crosses the cap', async metric => {
+    const { store, query, release } = transport({}, { limits: { maxStateBytes: 1000, maxEntityRows: 1 }, sizes: (rows, call) => call === 1 ? rows : rows.map((row,index) => index ? row : { ...row, [metric]: metric === 'bytes' ? '1001' : '2' }) });
+    await expect(store.transaction(db => db.schemaVersion)).rejects.toMatchObject({ code: 'unavailable' });
+    const sql = query.mock.calls.map(call => call[0]);
+    expect(sql.filter(text => text.includes('as bytes'))).toHaveLength(2);
+    expect(sql.filter(text => text.includes('as bytes'))[0]).toBe(sql.filter(text => text.includes('as bytes'))[1]);
+    expect(sql).not.toContain('commit'); expect(sql.at(-1)).toBe('rollback'); expect(release).toHaveBeenCalledOnce();
+  });
+  it('rechecks all optional review tables in one pre-COMMIT request', async () => {
+    const { store, query } = transport({}, { reviewReady: true }); await store.transaction(db => db.schemaVersion);
+    const batches = query.mock.calls.map(call => call[0]).filter(text => text.includes('as bytes'));
+    expect(batches).toHaveLength(2); expect(batches[1]).toBe(batches[0]);
+    expect(query.mock.calls.filter(call => call[0].includes('to_regclass'))).toHaveLength(1);
+    for (const table of reviewTables) expect(batches[1]).toContain(`from public.${table}`);
   });
 });
