@@ -5,13 +5,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Check, ChevronRight, Clock3, Download, FileCode2, MessageSquare, Pause, Play, Send, Square, Terminal } from "lucide-react";
 import type { EditProposal, EvidenceItem, SessionView } from "@/lib/interview-practice/types";
 import { Dialog, ErrorNotice, Loading } from "@/components/ui";
-import { api, ApiError, downloadJson, humanize, requestId } from "./client";
+import { api, ApiError, downloadJson, ensureIdentity, humanize, requestId } from "./client";
 import type { Capabilities, SessionResponse } from "./contracts";
 import { ReportView } from "./report";
 import { VoiceControls } from "./voice";
 import { InteractionControls } from "./interactions";
 import { usePreferences } from "./preferences";
 import { LearnerReview } from "@/features/reviews/learner-review";
+import { pendingIntent, readPendingRequests, writePendingRequests, type PendingRequest } from "./recovery";
 
 type Draft = { files: Record<string, string>; savedAt: string };
 type Panel = "interviewer" | "assistant";
@@ -39,7 +40,11 @@ export function InterviewWorkspace({ id }: { id: string }) {
   const filesRef = useRef(files);
   const dirtyRef = useRef(false);
   const mutationRef = useRef(false);
+  const pendingMutations = useRef(new Map<string, PendingRequest>());
+  const [pendingActions, setPendingActions] = useState<Array<[string, PendingRequest]>>([]);
+  const ownerRef = useRef<string | null>(null);
   const draftKey = `foundry-practice-draft:${id}`;
+  const syncPendingActions = useCallback(() => setPendingActions([...pendingMutations.current].filter(([, item]) => item.uncertain)), []);
 
   const apply = useCallback((result: SessionResponse, replaceFiles = true) => {
     if (sessionRef.current && result.session.revision < sessionRef.current.revision) return;
@@ -47,7 +52,12 @@ export function InterviewWorkspace({ id }: { id: string }) {
     if (result.capabilities) setCapabilities(result.capabilities);
     if (replaceFiles && !dirtyRef.current) { filesRef.current = result.session.files; setFiles(result.session.files); }
   }, []);
-  const refresh = useCallback((initial = false) => api<SessionResponse>(`/sessions/${id}`).then((result) => {
+  const refresh = useCallback(async (initial = false) => {
+    if (!ownerRef.current) {
+      const auth = await ensureIdentity();
+      pendingMutations.current = readPendingRequests(auth.user.id, `session:${id}`); ownerRef.current = auth.user.id; syncPendingActions();
+    }
+    const result = await api<SessionResponse>(`/sessions/${id}`);
     apply(result);
     if (initial) {
       setActiveFile(Object.keys(result.session.files)[0] || "");
@@ -59,8 +69,8 @@ export function InterviewWorkspace({ id }: { id: string }) {
       } catch { /* Local recovery is optional when browser storage is unavailable. */ }
     }
     return result;
-  }), [apply, draftKey, id]);
-  useEffect(() => { refresh(true).catch((e) => setError(e.message)); }, [refresh]);
+  }, [apply, draftKey, id, syncPendingActions]);
+  useEffect(() => { void Promise.resolve().then(() => refresh(true)).catch((e) => setError(e.message)); }, [refresh]);
   useEffect(() => {
     const timer = setInterval(() => {
       const current = sessionRef.current; if (!current) return;
@@ -103,14 +113,39 @@ export function InterviewWorkspace({ id }: { id: string }) {
   }
   async function mutate(path: string, body: Record<string, unknown> = {}, label = "action", operationRequestId?: string) {
     setError(""); setBusy(label);
+    // Revision polling must not turn an interrupted action into another action.
+    // The semantic input selects the pending intent; its exact wire body is frozen.
+    const intent = JSON.stringify({ path, body, operationRequestId });
+    const wasPending = pendingMutations.current.has(intent); let sent = false;
+    function completePending() {
+      const pending = pendingMutations.current.get(intent); pendingMutations.current.delete(intent);
+      try { writePendingRequests(ownerRef.current!, `session:${id}`, pendingMutations.current); }
+      catch (e) { if (pending) pendingMutations.current.set(intent, pending); throw e; }
+      syncPendingActions();
+    }
     try {
-      await save();
+      const auth = await ensureIdentity();
+      if (auth.user.id !== ownerRef.current) throw new Error("Your account changed. Reload the saved session before retrying an action.");
+      if (!pendingMutations.current.has(intent)) await save();
       if (mutationRef.current) throw new Error("Another action is still in progress.");
       mutationRef.current = true;
       const current = sessionRef.current!;
-      const result = await api<SessionResponse & { hint?: string }>(`/sessions/${id}/${path}`, { method: "POST", body: JSON.stringify({ ...body, expectedRevision: current.revision, requestId: operationRequestId ?? requestId() }) });
+      const pending = pendingMutations.current.get(intent) ?? { payload: JSON.stringify({ ...body, expectedRevision: current.revision, requestId: operationRequestId ?? requestId() }), uncertain: false, createdAt: new Date().toISOString() };
+      pendingMutations.current.set(intent, pending);
+      writePendingRequests(ownerRef.current!, `session:${id}`, pendingMutations.current); sent = true;
+      const result = await api<SessionResponse & { hint?: string }>(`/sessions/${id}/${path}`, { method: "POST", body: pending.payload });
+      if (!result.session?.id || typeof result.session.revision !== "number") throw new Error("The action response was interrupted. Retry the same action to recover its outcome.");
+      completePending();
       apply(result); if (result.hint) setHint(result.hint); return result;
-    } catch (e) { setError(e instanceof Error ? e.message : "The action could not be completed."); throw e; }
+    } catch (e) {
+      const pending = pendingMutations.current.get(intent);
+      if ((!sent && !wasPending) || (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408 && !wasPending)) {
+        try { completePending(); } catch { if (pending) pending.uncertain = true; }
+      }
+      else if (pending) pending.uncertain = true;
+      syncPendingActions();
+      setError(e instanceof Error ? e.message : "The action could not be completed."); throw e;
+    }
     finally { mutationRef.current = false; setBusy(""); }
   }
   async function command(action: string) { await mutate("commands", { action }, action); setConfirm(null); }
@@ -123,15 +158,18 @@ export function InterviewWorkspace({ id }: { id: string }) {
   const latestRun = session?.runs.at(-1);
   const isComplete = session?.lifecycle === "completed";
   const activeStage = session?.scenario.stages.find((stage) => stage.id === session.stageId);
+  const reportJob = session?.jobs.filter((job) => job.kind === "coach").at(-1);
+  const reportInterrupted = reportJob?.state === "failed" || reportJob?.state === "cancelled";
 
   if (!session) return <div className="workspace-loading">{error ? <ErrorNotice message={error} action={<Link className="button" href="/history">Back to history</Link>} /> : <Loading>Opening your saved workspace…</Loading>}</div>;
   return <>
     <header className="workspace-header"><div className="workspace-title"><Link href="/interview-practice" className="icon-button" aria-label="Back to scenarios"><ArrowLeft size={20} /></Link><div><h1>{session.scenario.title}</h1><span>{humanize(session.mode)} · {session.configuration.level} · Python · {humanize(session.stageId)}</span></div></div><div className="workspace-actions"><span className={`save-status ${saveStatus}`} role="status">{saveStatus === "saved" && <Check size={14} />}{saveStatus === "saving" ? "Saving…" : saveStatus === "dirty" ? "Unsaved changes" : saveStatus === "error" ? "Save failed" : "Saved"}</span><span className="session-clock" title="Elapsed wall time; timing is advisory"><Clock3 size={15} />{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")} <span className="muted">/ {session.configuration.targetMinutes} min</span></span>{session.lifecycle === "active" && session.mode === "practice" && <button className="button small" disabled={Boolean(busy)} onClick={() => command("pause").catch(() => {})}><Pause size={14} />Pause</button>}{session.lifecycle === "paused" && <button className="button small" disabled={Boolean(busy)} onClick={() => command("resume").catch(() => {})}><Play size={14} />Resume</button>}{!frozen && session.lifecycle === "active" && <button className="button primary small" disabled={actionPending || runningJobs.length > 0} onClick={() => setConfirm("finish")}>Finish coding <ChevronRight size={15} /></button>}{frozen && session.lifecycle === "active" && <button className="button primary small" disabled={actionPending || runningJobs.length > 0} onClick={() => setConfirm("submit")}>Final submit <ChevronRight size={15} /></button>}</div></header>
     {error && <div className="workspace-notice"><ErrorNotice message={error} action={<><button className="button small" onClick={() => downloadJson(`${session.id}-draft.json`, filesRef.current)}><Download size={14} />Download draft</button><button className="button small" onClick={() => window.location.reload()}>Reload saved session</button></>} /></div>}
+    {pendingActions.length > 0 && <div className="recovery-banner" role="status"><span>An action lost its response. Recover its original result before repeating it. Pending requests stay in this tab across reloads; recovery does not automatically send them.</span>{pendingActions.map(([intent]) => { const action = pendingIntent(intent); if (!action) return null; const label = action.path === "hints" ? "hint" : action.path === "commands" ? String(action.body.action).replace("advance", "checkpoint") : action.path === "assistant" ? "assistance" : action.path === "turns" ? "answer" : action.path === "interaction" ? "interview control" : action.path === "reports" ? "report retry" : action.path.replaceAll("-", " "); return <button className="button small" key={intent} disabled={actionPending} onClick={() => mutate(action.path, action.body, "recovery", action.operationRequestId).catch(() => {})}>Recover {label}</button>; })}</div>}
     {draft && <div className="recovery-banner" role="status"><div><strong>A local draft is available.</strong> It differs from the last acknowledged save.</div><button className="button small" onClick={() => { filesRef.current = draft.files; setFiles(draft.files); dirtyRef.current = true; setSaveStatus("dirty"); setDraft(null); }}>Restore draft</button><button className="text-button" onClick={() => { localStorage.removeItem(draftKey); setDraft(null); }}>Discard local draft</button></div>}
     {session.lifecycle === "paused" && <div className="recovery-banner"><Pause size={17} /><span>Session paused. Your workspace and conversation are saved. Resume when you are ready.</span></div>}
     {frozen && session.lifecycle === "active" && <div className="debrief-banner"><MessageSquare size={17} /><span><strong>Coding is finished.</strong> Explain your decisions in the Interviewer tab. Final submit closes the discussion and generates feedback.</span></div>}
-    {session.lifecycle === "reviewing" && <div className="debrief-banner"><Loading>Preparing your report from the frozen attempt…</Loading><span>You can leave this page and return through History.</span>{session.jobs.some((job) => job.kind === "coach" && job.state === "failed") && <button className="button small" disabled={actionPending || runningJobs.length > 0} onClick={() => mutate("reports", {}, "report").catch(() => {})}>Retry report</button>}</div>}
+    {session.lifecycle === "reviewing" && <div className="debrief-banner">{reportInterrupted ? <span>{reportJob.state === "cancelled" ? "Report preparation was cancelled." : "Report preparation did not complete."} Your frozen attempt is saved.</span> : <Loading>Preparing your report from the frozen attempt…</Loading>}<span>You can leave this page and return through History.</span>{reportInterrupted && <button className="button small" disabled={actionPending || runningJobs.length > 0} onClick={() => mutate("reports", {}, "report").catch(() => {})}>Retry report</button>}</div>}
     {isComplete && session.reports.length > 0 ? <div className="report-workspace"><ReportView session={session} onEvidence={setSelectedEvidence} onDrill={(drillId) => mutate("drills", { drillId }, "drill")} /><details className="attempt-details"><summary>View saved workspace and conversation</summary><SavedAttempt session={session} /></details></div> : <div className="workspace-grid">
       <aside className="task-panel" aria-label="Scenario instructions"><div className="panel-title"><h2>Task</h2><span className="muted">v{session.scenarioVersion}</span></div><p>{session.scenario.summary}</p><ol className="stage-list">{session.scenario.stages.map((stage, index) => <li key={stage.id} aria-current={stage.id === session.stageId ? "step" : undefined}><span>{index + 1}</span><div>{stage.title}</div></li>)}</ol><section><h3>{activeStage?.title || "Debrief"}</h3><p>{activeStage?.brief || "Discuss the frozen implementation and the evidence from your attempt."}</p>{activeStage?.requirements.length ? <ul className="requirements">{activeStage.requirements.map((r) => <li key={r}>{r}</li>)}</ul> : null}</section><div className="task-actions">{!frozen && session.lifecycle === "active" && <button className="button" disabled={actionPending || runningJobs.length > 0} onClick={() => command("advance").catch(() => {})}>Next checkpoint <ChevronRight size={15} /></button>}{session.mode === "practice" && !frozen && <button className="text-button" disabled={Boolean(busy) || session.lifecycle !== "active"} onClick={() => mutate("hints", {}, "hint").catch(() => {})}>Show a hint ({session.hintsOpened} used)</button>}</div>{hint && <div className="hint"><h3>Hint</h3><p>{hint}</p></div>}<details className="rubric-details"><summary>What you will practise</summary><ul>{session.scenario.rubric.map((criterion) => <li key={criterion.id}><strong>{criterion.name}</strong><p>{criterion.description}</p></li>)}</ul></details><p className="task-footnote">{session.configuration.aiHelp ? "Coding assistance is allowed and recorded." : "Coding assistance is off for this attempt."} {session.mode === "simulation" ? "Help policy is fixed for this simulation." : "Hints and pauses are available in practice."}</p><details className="review-task-help"><summary>Technical help and support permissions</summary><LearnerReview sessionId={session.id} criteria={session.scenario.rubric} /></details></aside>
       <section className="code-panel" aria-label="Code workspace"><div className="editor-toolbar"><div className="file-selector"><FileCode2 size={16} aria-hidden="true" /><label className="sr-only" htmlFor="active-file">Active file</label><select id="active-file" value={activeFile} onChange={(e) => setActiveFile(e.target.value)}>{Object.keys(files).map((name) => <option key={name}>{name}</option>)}</select></div><span className="muted">{frozen ? "Frozen snapshot" : "Python"}</span><button className="text-button" disabled={saveStatus === "saved" || saveStatus === "saving" || readOnly} onClick={() => save().catch(() => {})}>Save</button></div><div className="editor-body"><div className="file-tree" aria-label="Files">{Object.keys(files).map((name) => <button key={name} className={name === activeFile ? "file active" : "file"} onClick={() => setActiveFile(name)} title={name}><FileCode2 size={14} aria-hidden="true" /><span>{name}</span></button>)}</div><div className="editor-wrap"><label className="sr-only" htmlFor="code-editor">Edit {activeFile}. Tab moves to the next control.</label><textarea id="code-editor" className="code-editor" style={{ fontSize: editorFontSize }} spellCheck={false} autoCapitalize="off" autoCorrect="off" value={files[activeFile] || ""} readOnly={readOnly} onChange={(e) => edit(e.target.value)} wrap="off" aria-describedby="editor-help" /><span id="editor-help" className="sr-only">Plain text code editor. Tab moves focus. {readOnly ? "This workspace is read only." : "Changes save automatically after one second."}</span></div></div>
