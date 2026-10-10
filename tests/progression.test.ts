@@ -39,6 +39,13 @@ function corrected(session: SessionView, level: RubricLevel) {
 }
 
 describe('deterministic skill profile evidence', () => {
+  it('preserves timing and written conditions as provenance without changing findings', () => {
+    const ordinary = attempt('a'), adjusted = structuredClone(ordinary);
+    adjusted.configuration = { ...adjusted.configuration, originalTargetMinutes: 60, targetMinutes: 90, practiceConditions: { timing: 'extra-15', participation: 'written-only' } };
+    const baseline = buildProgression([ordinary], catalog), result = buildProgression([adjusted], catalog);
+    expect(result.skills.map(skill => [skill.level, skill.levels, skill.observations])).toEqual(baseline.skills.map(skill => [skill.level, skill.levels, skill.observations]));
+    expect(result.skills[0].history[0].conditions).toMatchObject({ accommodationCount: 2, originalTargetMinutes: 60, targetMinutes: 90, extendedMinutes: 30, setupExtraMinutes: 15, participation: 'written-only' });
+  });
   it('preserves the existing progress response fields while adding provenance', () => {
     const result = buildProgression([attempt('a')], catalog);
     const skill = result.skills[0], recommendation = result.recommendations[0];

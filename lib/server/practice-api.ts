@@ -17,10 +17,11 @@ import type { SessionMutationResult } from './session-service';
 import { buildProgression } from '../interview-practice/progression';
 import { admittedScenarios } from './rollout';
 import { withFoundryNavigation } from './foundry-navigation';
+import { practiceConditionsSchema } from '../interview-practice/timing';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
-const creation = z.object({ scenarioId: z.string().max(100), version: z.string().max(30).optional(), mode: z.enum(['practice', 'simulation']).optional(), requestId: z.string().min(8).max(128), role: z.string().max(120).optional(), level: z.string().max(100).optional(), skills: z.array(z.string().max(100)).max(20).optional(), targetMinutes: z.number().int().min(5).max(180).optional(), aiHelp: z.boolean().optional(), voice: z.boolean().optional(), accommodations: z.array(z.string().max(200)).max(10).optional() });
+const creation = z.object({ scenarioId: z.string().max(100), version: z.string().max(30).optional(), mode: z.enum(['practice', 'simulation']).optional(), requestId: z.string().min(8).max(128), role: z.string().max(120).optional(), level: z.string().max(100).optional(), skills: z.array(z.string().max(100)).max(20).optional(), targetMinutes: z.number().int().min(5).max(180).optional(), aiHelp: z.boolean().optional(), voice: z.boolean().optional(), accommodations: z.array(z.string().max(200)).max(10).optional(), practiceConditions: practiceConditionsSchema.optional() });
 
 function parsed<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -83,10 +84,11 @@ export async function practiceApi(request: Request, path: string[]) {
       return privateJson({ session, reviews }, 200, { 'Content-Disposition': `attachment; filename="practice-${id}.json"` });
     }
     if (!['POST', 'PUT'].includes(method)) throw new HttpError(404, 'not_found', 'Endpoint not found.');
-    const body = await readJson(request, operation === 'workspace' ? 300_000 : operation === 'interaction' ? 2000 : 20_000);
+    const body = await readJson(request, operation === 'workspace' ? 300_000 : ['interaction', 'timing'].includes(operation) ? 2000 : 20_000);
     let result: SessionMutationResult;
     if (method === 'PUT' && operation === 'workspace') result = await service.saveWorkspace(actor.id, id, parsed(mutation.extend({ files: z.record(z.string().max(64_000)) }), body));
     else if (method === 'POST' && operation === 'commands') result = await service.command(actor.id, id, parsed(mutation.extend({ action: z.enum(['advance', 'pause', 'resume', 'finish', 'submit']) }), body));
+    else if (method === 'POST' && operation === 'timing') result = await service.extendTiming(actor.id, id, parsed(mutation.extend({ additionalMinutes: z.union([z.literal(15), z.literal(30)]) }).strict(), body));
     else if (method === 'POST' && operation === 'turns') result = await service.commitTurn(actor.id, id, parsed(mutation.extend({ text: z.string().min(1).max(6000), source: z.enum(['typed', 'transcribed', 'corrected']).optional(), replyTo: z.string().optional() }), body));
     else if (method === 'POST' && operation === 'interaction') result = await new InteractionService(service.store).interact(actor.id, id, parsed(mutation.extend({ action: z.enum(['working', 'repeat', 'clarify']), topic: z.enum(['requirements', 'assistance', 'timing']).optional() }).strict(), body));
     else if (method === 'POST' && operation === 'runs') {

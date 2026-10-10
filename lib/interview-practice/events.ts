@@ -30,6 +30,12 @@ export const practiceEventSchema = z.discriminatedUnion('type', [
   event('coding.finished', { snapshotId: identifier }),
   event('session.paused', {}),
   event('session.resumed', {}),
+  event('session.timing-extended', {}).extend({ source: z.literal('learner'), payload: z.object({
+    additionalMinutes: z.union([z.literal(15), z.literal(30)]),
+    previousTargetMinutes: z.number().int().min(5).max(180),
+    targetMinutes: z.number().int().min(5).max(180),
+    originalTargetMinutes: z.number().int().min(5).max(180),
+  }).strict().refine(value => value.targetMinutes === value.previousTargetMinutes + value.additionalMinutes && value.originalTargetMinutes <= value.previousTargetMinutes) }),
   event('session.submitted', { snapshotId: identifier }),
   event('test.requested', { jobId: identifier, snapshotId: identifier }),
   event('test.completed', { runId: identifier, jobId: identifier, snapshotId: identifier, status: z.enum(['completed', 'infrastructure_error', 'timeout']) }),
