@@ -7,7 +7,8 @@ import { Pool } from 'pg';
 import { getScenario } from '../lib/content/scenarios';
 import { PostgresPracticeStore } from '../lib/server/postgres-store';
 import { SessionService } from '../lib/server/session-service';
-import { reserveVoice, settleVoice } from '../lib/voice/ledger';
+import { reconcileVoiceReservations, reserveVoice, settleVoice, VOICE_RECONCILIATION_POLICY, type VoiceLedgerEntry } from '../lib/voice/ledger';
+import { budgetTotals } from '../lib/interview-practice/quota';
 import type { VoiceConfig } from '../lib/voice/config';
 
 // Opt-in creates and removes only a fresh local Docker database. It never reads
@@ -79,5 +80,40 @@ describe.skipIf(!enabled)('voice admission on disposable PostgreSQL without spee
     await expect(reserveVoice(new PostgresPracticeStore(servicePool), limited, input(owner, next.id))).rejects.toMatchObject({ code: 'quota' });
     await expect(pool.query("update ai_practice_usage_ledger set runtime_payload = jsonb_set(runtime_payload, '{voice,characters}', '999999'::jsonb) where runtime_payload ? 'voice'")).rejects.toMatchObject({ code: '23514' });
     expect((await store.read()).ledger.some(entry => entry.operationId.startsWith('voice:'))).toBe(true);
+  });
+  it('recovers a process-crash reservation exactly once across independent adapters and fences the original callback', async () => {
+    const session = await create(), at = new Date('2026-10-31T23:59:30.000Z'), expired = new Date(at.getTime() + VOICE_RECONCILIATION_POLICY.leaseMs);
+    const reservation = await reserveVoice(store, config, input(owner, session.id), at);
+    const second = new PostgresPracticeStore(servicePool), before = await second.read();
+    expect((before.ledger.find(entry => entry.operationId === `${reservation.key}:reserved`) as VoiceLedgerEntry).voice.expiresAt).toBe(expired.toISOString());
+    expect((await reconcileVoiceReservations(second, { now: expired })).selected).toBe(1); expect(await second.read()).toEqual(before);
+    const results = await Promise.all([reconcileVoiceReservations(second, { apply: true, now: expired }), reconcileVoiceReservations(new PostgresPracticeStore(servicePool), { apply: true, now: expired })]);
+    expect(results.map(result => result.reconciled).sort()).toEqual([0, 1]);
+    expect(await settleVoice(new PostgresPracticeStore(servicePool), reservation, false, expired)).toBe(false);
+    const reloaded = await new PostgresPracticeStore(servicePool).read(), entries = reloaded.ledger.filter(entry => entry.operationId.startsWith(reservation.key));
+    expect(entries).toHaveLength(2); expect(entries[1]).toMatchObject({ kind: 'uncertain', amountUsd: 0, createdAt: expired.toISOString(), budgetAt: at.toISOString() });
+    expect(reloaded.sessions[session.id].usage).toMatchObject({ reservedUsd: 0, uncertainUsd: .2, spentUsd: 0, voiceAllocatedSeconds: 60 });
+    expect(budgetTotals(reloaded.ledger, owner, at.toISOString()).userMonthlyUsd).toBe(.2);
+    expect(budgetTotals(reloaded.ledger, owner, expired.toISOString()).userMonthlyUsd).toBe(0);
+  });
+  it('closes a deleted legacy reservation conservatively without recreating private content', async () => {
+    const session = await create(), at = new Date('2026-10-09T12:00:00.000Z'), expired = new Date(at.getTime() + VOICE_RECONCILIATION_POLICY.leaseMs);
+    const reservation = await reserveVoice(store, config, input(owner, session.id), at);
+    await store.transaction(db => { const row = db.ledger.find(entry => entry.operationId === `${reservation.key}:reserved`)! as VoiceLedgerEntry; delete row.voice.expiresAt; delete row.budgetAt; });
+    await service.deleteAccount(owner, { requestId: randomUUID() });
+    const second = new PostgresPracticeStore(servicePool);
+    expect((await reconcileVoiceReservations(second, { apply: true, now: expired })).reconciled).toBe(1);
+    const restored = await second.read(); expect(restored.sessions[session.id]).toBeUndefined();
+    expect(restored.ledger.find(entry => entry.operationId === `${reservation.key}:uncertain`)).toMatchObject({ amountUsd: 0, budgetAt: at.toISOString() });
+    expect(await settleVoice(second, { ...reservation, expiresAt: undefined }, false, expired)).toBe(false);
+    expect(budgetTotals(restored.ledger, owner, at.toISOString()).userDailyUsd).toBe(.2);
+  });
+  it('retains malformed expiry for review instead of shortening the admitted lease', async () => {
+    const session = await create(), at = new Date('2026-10-09T12:00:00.000Z'), expired = new Date(at.getTime() + VOICE_RECONCILIATION_POLICY.leaseMs);
+    const reservation = await reserveVoice(store, config, input(owner, session.id), at);
+    await store.transaction(db => { const row = db.ledger.find(entry => entry.operationId === `${reservation.key}:reserved`)! as VoiceLedgerEntry; row.voice.expiresAt = at.toISOString(); });
+    const second = new PostgresPracticeStore(servicePool), before = await second.read();
+    expect(await reconcileVoiceReservations(second, { apply: true, now: expired })).toMatchObject({ ambiguous: 1, reconciled: 0 });
+    expect(await second.read()).toEqual(before);
   });
 });
