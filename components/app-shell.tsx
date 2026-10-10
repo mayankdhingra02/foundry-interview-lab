@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BookOpen, History, ChartNoAxesCombined, Settings2 } from "lucide-react";
+import { StaffLink } from "@/features/reviews/staff-link";
 
 const links = [
   { href: "/interview-practice", label: "Practice", icon: BookOpen },
@@ -19,7 +20,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <header className="site-header">
       <div className="nav-shell">
         <Link className="brand" href="/interview-practice" aria-label="Engineering Foundry home"><span className="brand-mark" aria-hidden="true">EF</span><span>Engineering <strong>Foundry</strong></span></Link>
-        <nav aria-label="Main navigation">{links.map(({ href, label, icon: Icon }) => <Link key={href} href={href} className={pathname.startsWith(href) ? "nav-link active" : "nav-link"} aria-current={pathname.startsWith(href) ? "page" : undefined}><Icon size={16} aria-hidden="true" />{label}</Link>)}</nav>
+        <nav aria-label="Main navigation">{links.map(({ href, label, icon: Icon }) => <Link key={href} href={href} className={pathname.startsWith(href) ? "nav-link active" : "nav-link"} aria-current={pathname.startsWith(href) ? "page" : undefined}><Icon size={16} aria-hidden="true" />{label}</Link>)}<StaffLink pathname={pathname} /></nav>
         <span className="app-label">Interview Lab</span>
       </div>
     </header>
