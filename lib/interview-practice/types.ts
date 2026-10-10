@@ -35,14 +35,15 @@ export type CoachingReport = CoachOutput & { id: string; generationId: string; c
 export type InterviewProposal = { action: 'ask_probe' | 'end_debrief'; question?: string; competencyId?: string; evidenceIds: string[]; probeId?: string };
 export type JobKind = 'run' | 'interviewer' | 'assistant' | 'coach';
 export type JobState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-export type PracticeJob = { id: string; sessionId: string; ownerId: string; kind: JobKind; state: JobState; requestId: string; fingerprint: string; snapshotId: string; input: Record<string, unknown>; createdAt: string; updatedAt: string; attempt: number; reservationSequence: number; fencingToken: number; claimToken: string | null; workerId: string | null; leaseExpiresAt: string | null; cancellationRequested: boolean; safeError?: string; reservedUsd: number; actualUsd?: number };
+export type InferenceRecord = { requestedModel: string; returnedModel: string; promptVersion: string; inputTokens: number; outputTokens: number; providerRequestId?: string; responseId?: string; startedAt: string; completedAt: string; usd: number; validated: boolean };
+export type PracticeJob = { id: string; sessionId: string; ownerId: string; kind: JobKind; state: JobState; requestId: string; fingerprint: string; snapshotId: string; input: Record<string, unknown>; createdAt: string; updatedAt: string; attempt: number; reservationSequence: number; fencingToken: number; claimToken: string | null; workerId: string | null; leaseExpiresAt: string | null; cancellationRequested: boolean; safeError?: string; reservedUsd: number; actualUsd?: number; inference?: InferenceRecord };
 export type JobClaim = { job: PracticeJob; workerId: string; claimToken: string; fencingToken: number };
-export type JobView = Omit<PracticeJob, 'ownerId' | 'claimToken' | 'workerId' | 'input' | 'fingerprint'>;
-export type JobResult =
+export type JobView = Omit<PracticeJob, 'ownerId' | 'claimToken' | 'workerId' | 'input' | 'fingerprint' | 'inference'>;
+export type JobResult = (
   | { kind: 'run'; run: RunExecution; actualUsd?: number }
   | { kind: 'interviewer'; proposal: InterviewProposal; model: string; actualUsd?: number }
   | { kind: 'assistant'; message: string; files?: Record<string, string>; model: string; actualUsd?: number }
-  | { kind: 'coach'; report: CoachOutput; model: string; promptVersion: string; actualUsd?: number };
+  | { kind: 'coach'; report: CoachOutput; model: string; promptVersion: string; actualUsd?: number }) & { inference?: InferenceRecord };
 export type Mutation = { requestId: string; expectedRevision: number };
 export type UsageSummary = { reservedUsd: number; spentUsd: number; uncertainUsd: number; runs: number; aiCalls: number };
 export type Session = {
