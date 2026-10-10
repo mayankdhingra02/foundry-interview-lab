@@ -4,6 +4,7 @@ import { coachOutputSchema } from '../interview-practice/evidence';
 import { requireActor } from './auth';
 import { handle, HttpError, privateJson, readJson } from './http';
 import { getReviewService } from './review-service';
+import { internalEvaluationApi } from './evaluation-api';
 
 const key = z.object({ requestId: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/) });
 const create = key.extend({ category: z.enum(['feedback','technical']), reportId: z.string().uuid().optional(), message: z.string().min(1).max(4000), criterionIds: z.array(z.string().max(100)).max(20).optional(), inspectionConsent: z.boolean(), supportActionsConsent: z.boolean() }).strict();
@@ -31,6 +32,7 @@ export function ownerReviewConsent(request: Request, caseId: string) {
   });
 }
 export function internalReviewApi(request: Request, path: string[]) {
+  if (path[0] === 'evaluations') return internalEvaluationApi(request, path.slice(1));
   return handle(request, async () => {
     const actor = await requireActor(request), service = await getReviewService();
     if (path.length === 1 && path[0] === 'access' && request.method === 'GET') return privateJson({ allowed: service.allowed(actor) });
