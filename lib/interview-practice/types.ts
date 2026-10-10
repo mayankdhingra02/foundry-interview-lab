@@ -1,3 +1,6 @@
+import type { PracticeEvent } from './events';
+export type { EventType, PracticeEvent } from './events';
+
 export type PracticeMode = 'practice' | 'simulation';
 export type Lifecycle = 'active' | 'paused' | 'reviewing' | 'completed';
 export type ScenarioStage = { id: string; title: string; brief: string; requirements: string[] };
@@ -18,8 +21,6 @@ export type PublicScenario = Omit<Scenario, 'referenceFiles' | 'tests' | 'probes
 };
 export type SessionConfiguration = { role: string; level: string; skills: string[]; targetMinutes: number; aiHelp: boolean; accommodations: string[] };
 export type Snapshot = { id: string; sequence: number; createdAt: string; sha256: string; files: Record<string, string> };
-export type EventType = 'session.started' | 'workspace.saved' | 'stage.changed' | 'coding.finished' | 'session.paused' | 'session.resumed' | 'session.submitted' | 'test.requested' | 'test.completed' | 'interviewer.question' | 'learner.answer-committed' | 'assistant.requested' | 'assistant.responded' | 'assistant.edit-decided' | 'coaching.ready' | 'operation.failed' | 'job.cancelled' | 'hint.opened' | 'drill.completed';
-export type PracticeEvent = { id: string; sessionId: string; sequence: number; schemaVersion: 1; type: EventType; occurredAt: string; recordedAt: string; source: 'learner' | 'server' | 'runner' | 'model'; requestId: string; payload: Record<string, unknown> };
 export type Turn = { id: string; role: 'interviewer' | 'learner'; text: string; source: 'typed' | 'transcribed' | 'corrected' | 'model' | 'authored'; createdAt: string; replyTo?: string; competencyId?: string; evidenceIds: string[] };
 export type TestObservation = { id: string; title: string; status: 'passed' | 'failed' | 'error' | 'skipped'; detail?: string };
 export type RunExecution = { status: 'completed' | 'infrastructure_error' | 'timeout'; command: string; stdout: string; stderr: string; exitCode: number | null; tests: TestObservation[]; durationMs: number; runtimeDigest?: string };
