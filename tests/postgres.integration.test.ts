@@ -34,7 +34,7 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     for (let i = 0; i < 80; i++) { try { await pool.query('select 1'); ready = true; break; } catch { await delay(100); } }
     if (!ready) throw new Error('Disposable PostgreSQL did not become ready.');
     await pool.query(`create schema auth; create table auth.users (id uuid primary key); create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls; grant usage on schema public,auth to anon,authenticated,service_role; create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$; grant execute on function auth.uid() to anon,authenticated,service_role;`);
-    for (const file of ['202610090001_ai_practice_foundation.sql', '202610090002_runtime_persistence.sql']) await pool.query(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
+    for (const file of ['202610090001_ai_practice_foundation.sql', '202610090002_runtime_persistence.sql', '202610090007_event_contract.sql']) await pool.query(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     // Runtime qualification uses the actual service-role grants, rather than table-owner privileges.
     servicePool = new Pool({ host: '127.0.0.1', port: Number(port), user: 'postgres', password: 'disposable_foundry_test_only', database: 'foundry_test', options: '-c role=service_role', max: 8 });
     expect((await servicePool.query('select current_user')).rows[0].current_user).toBe('service_role');
@@ -90,6 +90,13 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     await expect(store.transaction(db => { db.sessions[session.id].files['service.py'] = 'uncommitted'; throw new Error('planned rollback'); })).rejects.toMatchObject({ code: 'unavailable' });
     expect((await service.getSession(ownerA, session.id)).files['service.py']).toBe(fixture.files['service.py']);
     await expect(pool.query("update public.ai_practice_events set payload='{}'::jsonb where session_id=$1", [session.id])).rejects.toMatchObject({ code: '23514' });
+  });
+  it('retains strict event type and schema-version rejection after the additive event migration', async () => {
+    const session = await create(), original = session.events[0], at = new Date().toISOString();
+    const insert = (type: string, version: number) => pool.query('insert into public.ai_practice_events(id,session_id,user_id,sequence,schema_version,event_type,source,request_id,payload,occurred_at,recorded_at,runtime_payload) values ($1,$2,$3,2,$4,$5,$6,$7,$8,$9,$9,$10)', [req(),session.id,ownerA,version,type,'server',req(),'{}',at,JSON.stringify({ ...original, type, schemaVersion: version, sequence: 2 })]);
+    await expect(insert('unknown.event', 1)).rejects.toMatchObject({ code: '23514' });
+    await expect(insert('session.paused', 2)).rejects.toMatchObject({ code: '23514' });
+    expect((await service.getSession(ownerA, session.id)).events).toHaveLength(1);
   });
   it('persists lease takeover, fencing and uncertain external cost across service restarts', async () => {
     let now = new Date('2026-10-09T12:00:00.000Z');

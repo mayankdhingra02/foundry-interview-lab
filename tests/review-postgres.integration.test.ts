@@ -22,7 +22,7 @@ describe.skipIf(!enabled)('review workflow in a disposable real PostgreSQL datab
     for (let i = 0; i < 80; i++) { try { await pool.query('select 1'); ready = true; break; } catch { await delay(100); } }
     if (!ready) throw new Error('Disposable review PostgreSQL did not become ready.');
     await pool.query(`create schema auth; create table auth.users(id uuid primary key); create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls; grant usage on schema public,auth to anon,authenticated,service_role; create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$; grant execute on function auth.uid() to anon,authenticated,service_role;`);
-    for (const file of ['202610090001_ai_practice_foundation.sql','202610090002_runtime_persistence.sql','202610090006_reviews.sql']) await pool.query(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
+    for (const file of ['202610090001_ai_practice_foundation.sql','202610090002_runtime_persistence.sql','202610090006_reviews.sql','202610090007_event_contract.sql']) await pool.query(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     servicePool = new Pool({ ...connection, max: 8, options: '-c role=service_role' });
     expect((await servicePool.query('select current_user')).rows[0].current_user).toBe('service_role');
     store = new PostgresPracticeStore(servicePool); context = harness(store);
