@@ -1,0 +1,206 @@
+{
+  "id": "stock-lifecycle",
+  "version": "1.0.0",
+  "familyId": "inventory-reservations",
+  "title": "Reserve, retry, cancel",
+  "summary": "Preserve a durable reservation lifecycle under concurrent retries and cancellations.",
+  "durationMinutes": 60,
+  "level": "Senior",
+  "tags": [
+    "Inventory",
+    "Senior",
+    "Original draft"
+  ],
+  "language": "python",
+  "curriculum": {
+    "tier": "Senior",
+    "calibration": "unreviewed",
+    "constraints": [
+      "Preserve ReservationStore(path), seed, available, reserve(request_id, sku, quantity), cancel(request_id), close. Each worker owns a separate SQLite connection. Seed is a pre-request fixture; concurrent reseeding is excluded.",
+      "Persist exact request payload and original accepted/denied outcome. Exact retries return that outcome across reopen, including after cancellation; conflicting reuse raises ValueError unchanged.",
+      "cancel returns True exactly once for an accepted active request and restores its original stock; unknown/denied/already-cancelled returns False unchanged. Unknown cancellation does not claim the ID. Retry after cancellation cannot re-debit or reactivate.",
+      "Coordinate reserve and cancel atomically across independent workers using durable state. Available stock plus accepted active quantities equals seeded stock and remains non-negative.",
+      "Validate non-empty exact-text identifiers and exact positive integer reservations; seed accepts non-negative exact integer counts. Booleans and malformed values raise ValueError before mutation. Explain contention, failure boundaries and limits of stress-test evidence."
+    ],
+    "prerequisites": [
+      {
+        "id": "state-lifecycle-errors",
+        "title": "State, lifecycle and errors",
+        "description": "Model original outcomes separately from current active/cancelled state.",
+        "lesson": {
+          "id": "state-lifecycle-errors",
+          "foundryPath": "/low-level-design/lessons/state-lifecycle-errors"
+        }
+      },
+      {
+        "id": "concurrency-testability-evolution",
+        "title": "Concurrency and testability",
+        "description": "Identify a serialization point and test independent connections.",
+        "lesson": {
+          "id": "concurrency-testability-evolution",
+          "foundryPath": "/low-level-design/lessons/concurrency-testability-evolution"
+        }
+      },
+      {
+        "id": "correctness",
+        "title": "Correctness and boundary tests",
+        "description": "State the conservation invariant before evaluating concurrency evidence.",
+        "lesson": {
+          "id": "correctness",
+          "foundryPath": "/dsa/foundations/correctness"
+        }
+      }
+    ]
+  },
+  "starterFiles": [
+    "README.md",
+    "inventory.py"
+  ],
+  "referenceFiles": [
+    "README.md",
+    "inventory.py"
+  ],
+  "stages": [
+    {
+      "id": "understand",
+      "title": "Understand the contract",
+      "brief": "Preserve a durable reservation lifecycle under concurrent retries and cancellations. Use Python 3.11 standard-library modules only.",
+      "requirements": [
+        "Preserve ReservationStore(path), seed, available, reserve(request_id, sku, quantity), cancel(request_id), close. Each worker owns a separate SQLite connection. Seed is a pre-request fixture; concurrent reseeding is excluded.",
+        "Persist exact request payload and original accepted/denied outcome. Exact retries return that outcome across reopen, including after cancellation; conflicting reuse raises ValueError unchanged.",
+        "cancel returns True exactly once for an accepted active request and restores its original stock; unknown/denied/already-cancelled returns False unchanged. Unknown cancellation does not claim the ID. Retry after cancellation cannot re-debit or reactivate.",
+        "Coordinate reserve and cancel atomically across independent workers using durable state. Available stock plus accepted active quantities equals seeded stock and remains non-negative.",
+        "Validate non-empty exact-text identifiers and exact positive integer reservations; seed accepts non-negative exact integer counts. Booleans and malformed values raise ValueError before mutation. Explain contention, failure boundaries and limits of stress-test evidence."
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Implement the change",
+      "brief": "Preserve the documented interface and explain your choices.",
+      "requirements": [
+        "Preserve valid behavior and exact request identity.",
+        "Make errors leave state unchanged."
+      ]
+    },
+    {
+      "id": "verify",
+      "title": "Verify the behavior",
+      "brief": "Run the authored checks and add one targeted learner regression check.",
+      "requirements": [
+        "Use the disclosed contract and failure cases.",
+        "Explain what the observed checks do not establish."
+      ]
+    },
+    {
+      "id": "debrief",
+      "title": "Defend your decisions",
+      "brief": "Explain your code, evidence and remaining limits.",
+      "requirements": [
+        "Cite concrete code or executed checks.",
+        "Describe one alternative and its trade-off."
+      ]
+    }
+  ],
+  "rubric": [
+    {
+      "id": "lifecycle-atomicity",
+      "name": "Concurrent lifecycle invariants",
+      "description": "Serialize reservation, retry and cancellation effects.",
+      "anchors": {
+        "strong": "Coordinates independent connections, preserves the conservation invariant and identifies the serialization point.",
+        "developing": "Sequential lifecycle works but concurrent duplicate debit or restore is unaddressed.",
+        "needsWork": "Uses only local locks, double-debits or double-restores."
+      }
+    },
+    {
+      "id": "lifecycle-failures",
+      "name": "Durable lifecycle and failures",
+      "description": "Separate original request result from current active state.",
+      "anchors": {
+        "strong": "Preserves original outcome across reopen/cancel and rejects conflict without partial changes.",
+        "developing": "Persists normal requests but loses retry identity after cancellation or misses failed outcomes.",
+        "needsWork": "Reactivates cancelled requests or silently accepts conflicting payloads."
+      }
+    },
+    {
+      "id": "lifecycle-verification",
+      "name": "Concurrency evidence and trade-offs",
+      "description": "Connect observed schedules to the invariant and operational limits.",
+      "anchors": {
+        "strong": "Tests separate connections and exact accepted/cancel counts, and explains contention and untested schedules.",
+        "developing": "Runs stress threads without accounting checks or acknowledges few operational limits.",
+        "needsWork": "Treats one successful run as a proof of all schedules or distributed correctness."
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "stock-lifecycle-probe-1",
+      "stageId": "debrief",
+      "competencyId": "lifecycle-atomicity",
+      "question": "Which single boundary serializes both a reservation and its cancellation?"
+    },
+    {
+      "id": "stock-lifecycle-probe-2",
+      "stageId": "debrief",
+      "competencyId": "lifecycle-failures",
+      "question": "Why can the original accepted result stay True after the active state becomes cancelled?"
+    },
+    {
+      "id": "stock-lifecycle-probe-3",
+      "stageId": "debrief",
+      "competencyId": "lifecycle-verification",
+      "question": "How would you test duplicate concurrent cancellation, and which production failure modes remain unproven?"
+    }
+  ],
+  "hints": [
+    "Write a state diagram that separates original accepted outcome from current active state.",
+    "The transaction must cover both inventory and request state; cancellation needs the same serialization mechanism.",
+    "An exact retry after cancellation returns its old outcome while leaving active state cancelled. Assert final counts with separate connections."
+  ],
+  "tests": [
+    {
+      "id": "stock-lifecycle-public",
+      "title": "Public contract checks",
+      "file": "tests/test_public.py",
+      "visible": true,
+      "timeoutSeconds": 10
+    },
+    {
+      "id": "stock-lifecycle-protected",
+      "title": "Protected contract and edge checks",
+      "file": "tests/test_protected.py",
+      "visible": false,
+      "timeoutSeconds": 20
+    }
+  ],
+  "drills": [
+    {
+      "id": "stock-lifecycle-drill-1",
+      "title": "Concurrent lifecycle invariants",
+      "competencyId": "lifecycle-atomicity",
+      "lesson": "Serialize reservation, retry and cancellation effects.",
+      "exercise": "Which single boundary serializes both a reservation and its cancellation? Write one small counterexample and a regression check."
+    },
+    {
+      "id": "stock-lifecycle-drill-2",
+      "title": "Durable lifecycle and failures",
+      "competencyId": "lifecycle-failures",
+      "lesson": "Separate original request result from current active state.",
+      "exercise": "Why can the original accepted result stay True after the active state becomes cancelled? Write one small counterexample and a regression check."
+    },
+    {
+      "id": "stock-lifecycle-drill-3",
+      "title": "Concurrency evidence and trade-offs",
+      "competencyId": "lifecycle-verification",
+      "lesson": "Connect observed schedules to the invariant and operational limits.",
+      "exercise": "How would you test duplicate concurrent cancellation, and which production failure modes remain unproven? Write one small counterexample and a regression check."
+    }
+  ],
+  "rights": "Original Engineering Foundry preparation content; retained as proprietary project material. No claim of affiliation with an interview vendor.",
+  "runtime": {
+    "image": "python:3.11-slim",
+    "timeoutSeconds": 25,
+    "memoryMb": 256
+  }
+}

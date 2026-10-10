@@ -1,6 +1,7 @@
 import type { PracticeEvent } from './events';
 import type { LearnerCheckBinding } from './check-policy';
 import type { PracticeSetupConditions } from './timing';
+import type { ScenarioCurriculum } from './curriculum';
 export type { EventType, PracticeEvent } from './events';
 
 export type PracticeMode = 'practice' | 'simulation';
@@ -12,6 +13,7 @@ export type ScenarioTest = { id: string; title: string; source: string; visible:
 export type PracticeDrill = { id: string; title: string; competencyId: string; lesson: string; exercise: string };
 export type Scenario = {
   id: string; version: string; title: string; summary: string; durationMinutes: number;
+  familyId?: string; curriculum?: ScenarioCurriculum;
   level: string; tags: string[]; language: 'python'; files: Record<string, string>;
   stages: ScenarioStage[]; rubric: RubricCriterion[]; probes: ScenarioProbe[]; hints: string[];
   tests: ScenarioTest[]; referenceFiles: Record<string, string>; drills: PracticeDrill[];
