@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getScenario, listScenarios } from '../lib/content/scenarios';
 import { buildDockerArguments, buildPythonBundle, configuredRunner, executeScenario, parseTestResult, resetRunnerAdmission, runnerHealth } from '../lib/runtime/runner';
 import type { Scenario, ScenarioTest } from '../lib/interview-practice/types';
+import { LEARNER_CHECK_POLICY } from '../lib/interview-practice/check-policy';
 
 vi.mock('node:child_process', async importOriginal => {
   const original = await importOriginal<typeof import('node:child_process')>();
@@ -23,7 +24,7 @@ function row(test: ScenarioTest, resultNonce = nonce, status = 'passed', testsRu
   return `FOUNDRY_CHECK_${resultNonce}:${JSON.stringify({ id: test.id, nonce: resultNonce, status, testsRun, detail: '' })}\n`;
 }
 
-type FakeOptions = { hangStart?: boolean; cleanupFails?: boolean; outputFlood?: boolean; onStart?: () => void; inspectId?: string; imageMissing?: boolean };
+type FakeOptions = { hangStart?: boolean; cleanupFails?: boolean; outputFlood?: boolean; onStart?: () => void; inspectId?: string; imageMissing?: boolean; reportedTestsRun?: number; onPayload?: (value: { files: Record<string,string>; source: string; id: string }) => void };
 function installFakeDocker(options: FakeOptions = {}) {
   const calls: string[][] = [];
   spawnMock.mockImplementation((_program, argumentList) => {
@@ -46,7 +47,8 @@ function installFakeDocker(options: FakeOptions = {}) {
           if (options.outputFlood) { stdout.write('x'.repeat(70_000)); return; }
           const payloadMatch = input.match(/b64decode\('([A-Za-z0-9+/=]+)'\)/)!;
           const payload = JSON.parse(Buffer.from(payloadMatch[1], 'base64').toString('utf8'));
-          stdout.write(`FOUNDRY_CHECK_${payload.nonce}:${JSON.stringify({ id: payload.id, nonce: payload.nonce, status: 'passed', testsRun: 4, detail: '' })}\n`);
+          options.onPayload?.(payload);
+          stdout.write(`FOUNDRY_CHECK_${payload.nonce}:${JSON.stringify({ id: payload.id, nonce: payload.nonce, status: 'passed', testsRun: options.reportedTestsRun ?? 4, detail: '' })}\n`);
           close(0);
         });
       });
@@ -141,6 +143,35 @@ describe('snapshot runner contracts', () => {
     expect(result.tests.map(test => test.id)).toEqual(scenario.tests.map(test => test.id));
     expect(calls.filter(args => args[0] === 'create')).toHaveLength(2);
     expect(calls.filter(args => args[0] === 'rm')).toHaveLength(2);
+  });
+
+  it('executes only the explicit learner slot and leaves default/protected contracts intact', async () => {
+    const payloads: Array<{ source: string; id: string }> = [];
+    const calls = installFakeDocker({ onPayload: payload => payloads.push(payload) });
+    const scenario = example(), source = 'import unittest\nclass Check(unittest.TestCase):\n    def test_small(self): self.assertEqual(1 + 1, 2)\n';
+    const files = { ...scenario.files,[LEARNER_CHECK_POLICY.path]: source };
+    const learner = await executeScenario(scenario,files,{ selection: 'learner',includeProtected: true });
+    expect(learner.tests.map(test => test.id)).toEqual([LEARNER_CHECK_POLICY.testId]);
+    expect(payloads).toEqual([expect.objectContaining({ source,id: LEARNER_CHECK_POLICY.testId })]);
+    expect(calls.filter(args => args[0] === 'create')).toHaveLength(1);
+    payloads.length = 0;
+    const authored = await executeScenario(scenario,files,{ includeProtected: true });
+    expect(authored.tests.map(test => test.id)).toEqual(scenario.tests.map(test => test.id));
+    expect(payloads.map(row => row.source)).toEqual(scenario.tests.map(test => test.source));
+  });
+
+  it('does not infer a passing learner check from exit zero with zero discovered tests', async () => {
+    installFakeDocker({ reportedTestsRun: 0 });
+    const scenario = example();
+    const result = await executeScenario(scenario,{ ...scenario.files,[LEARNER_CHECK_POLICY.path]: '# no unittest discovered\n' },{ selection: 'learner' });
+    expect(result.tests[0].status).toBe('error'); expect(result.exitCode).toBe(1);
+  });
+
+  it('rejects unsupported or missing learner check selection before Docker I/O', async () => {
+    const scenario = example();
+    expect((await executeScenario(scenario,scenario.files,{ selection: 'learner' })).status).toBe('infrastructure_error');
+    expect((await executeScenario(scenario,scenario.files,{ selection: 'shell' as 'learner' })).status).toBe('infrastructure_error');
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it('rejects unsafe workspace files and unapproved images before execution', async () => {
@@ -306,5 +337,32 @@ describe.runIf(realDocker)('real isolated Docker execution', () => {
       expect(remaining.status, remaining.stderr).toBe(0);
       expect(remaining.stdout.trim()).toBe('');
     } finally { clearTimeout(timer); }
+  }, 60_000);
+
+  it('runs a real learner-authored unittest separately without replacing a failing protected contract', async () => {
+    const scenario = probeScenario('def check():\n    return False\n');
+    const files = { ...scenario.files,[LEARNER_CHECK_POLICY.path]: 'import unittest\nclass LearnerChecks(unittest.TestCase):\n    def test_arithmetic(self):\n        self.assertEqual(2 + 3, 5)\n' };
+    const learner = await executeScenario(scenario,files,{ selection: 'learner',includeProtected: true });
+    expect(learner.status,learner.stderr).toBe('completed'); expect(learner.exitCode).toBe(0);
+    expect(learner.tests).toEqual([expect.objectContaining({ id: LEARNER_CHECK_POLICY.testId,status: 'passed' })]);
+    const authored = await executeScenario(scenario,files,{ includeProtected: true });
+    expect(authored.tests[0]).toMatchObject({ id: 'isolation-probe',status: 'failed' }); expect(authored.exitCode).toBe(1);
+  }, 60_000);
+
+  it('rejects a real learner file with zero discovered tests instead of treating exit status as proof', async () => {
+    const scenario = probeScenario('def check():\n    return True\n');
+    const result = await executeScenario(scenario,{ ...scenario.files,[LEARNER_CHECK_POLICY.path]: 'print("all tests passed")\n' },{ selection: 'learner' });
+    expect(result.status,result.stderr).toBe('completed'); expect(result.exitCode).toBe(1);
+    expect(result.tests[0]).toMatchObject({ id: LEARNER_CHECK_POLICY.testId,status: 'error' });
+    expect(result.tests[0].detail).toContain('No unittest checks');
+  }, 60_000);
+
+  it('times out a real learner check at its fixed policy limit and cleans up', async () => {
+    const scenario = probeScenario('def check():\n    return True\n');
+    const result = await executeScenario(scenario,{ ...scenario.files,[LEARNER_CHECK_POLICY.path]: 'import time\ntime.sleep(60)\n' },{ selection: 'learner' });
+    expect(result.status,result.stderr).toBe('timeout'); expect(result.tests[0].status).toBe('skipped');
+    expect(result.stderr).toContain('destroyed');
+    const remaining = spawnSync('docker',['ps','-aq','--filter','label=foundry.interview-execution=true'],{ encoding: 'utf8' });
+    expect(remaining.status,remaining.stderr).toBe(0); expect(remaining.stdout.trim()).toBe('');
   }, 60_000);
 });

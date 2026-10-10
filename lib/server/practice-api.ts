@@ -92,7 +92,7 @@ export async function practiceApi(request: Request, path: string[]) {
     else if (method === 'POST' && operation === 'turns') result = await service.commitTurn(actor.id, id, parsed(mutation.extend({ text: z.string().min(1).max(6000), source: z.enum(['typed', 'transcribed', 'corrected']).optional(), replyTo: z.string().optional() }), body));
     else if (method === 'POST' && operation === 'interaction') result = await new InteractionService(service.store).interact(actor.id, id, parsed(mutation.extend({ action: z.enum(['working', 'repeat', 'clarify']), topic: z.enum(['requirements', 'assistance', 'timing']).optional() }).strict(), body));
     else if (method === 'POST' && operation === 'runs') {
-      const input = parsed(mutation, body);
+      const input = parsed(mutation.extend({ selection: z.enum(['authored', 'learner']).optional() }).strict(), body);
       // Operational reads stay outside the transaction. Only fresh work invokes
       // this captured decision; acknowledged retries retain their original result.
       let available = false;

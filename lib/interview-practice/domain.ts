@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { EventValidationError, parsePracticeEvent, type EventPayload } from './events';
+import { LEARNER_CHECK_POLICY } from './check-policy';
 import type { EventType, PracticeEvent, PublicScenario, Scenario, Session, Snapshot } from './types';
 
 export class DomainError extends Error {
@@ -39,14 +40,20 @@ export function assertCoding(session: Session) {
 }
 export function validateFiles(files: unknown, scenario: Pick<Scenario, 'files'>): Record<string, string> {
   if (!files || typeof files !== 'object' || Array.isArray(files) || Object.getPrototypeOf(files) !== Object.prototype) throw new DomainError('invalid', 'Provide workspace files.');
-  const expected = Object.keys(scenario.files).sort(), actual = Object.keys(files).sort();
-  if (canonical(expected) !== canonical(actual)) throw new DomainError('invalid', 'Workspace must contain exactly the scenario files.');
+  const expected = Object.keys(scenario.files), actual = Object.keys(files).sort();
+  // Existing packages/snapshot bytes remain unchanged. One reserved optional
+  // slot is an additive workspace policy and is never a protected contract.
+  const learnerSlot = Object.hasOwn(files, LEARNER_CHECK_POLICY.path) && !Object.hasOwn(scenario.files, LEARNER_CHECK_POLICY.path);
+  if (learnerSlot) expected.push(LEARNER_CHECK_POLICY.path);
+  expected.sort();
+  if (canonical(expected) !== canonical(actual)) throw new DomainError('invalid', 'Workspace must contain exactly the scenario files, plus at most the optional learner_checks.py check slot.');
   const safe: Record<string, string> = {};
   let bytes = 0;
   for (const path of expected) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_./-]{0,150}$/.test(path) || path.split('/').some(s => s === '.' || s === '..' || !s)) throw new DomainError('invalid', 'Unsafe workspace path.');
     const content = (files as Record<string, unknown>)[path];
     if (typeof content !== 'string' || content.includes('\0') || Buffer.byteLength(content) > 64_000) throw new DomainError('invalid', 'Each workspace file must be at most 64 KB of text.');
+    if (learnerSlot && path === LEARNER_CHECK_POLICY.path && Buffer.byteLength(content) > LEARNER_CHECK_POLICY.maxSourceBytes) throw new DomainError('invalid', 'Learner check source must be at most 8 KB.');
     bytes += Buffer.byteLength(content); safe[path] = content;
   }
   if (bytes > 256_000) throw new DomainError('invalid', 'Workspace exceeds 256 KB.');

@@ -8,17 +8,19 @@ import type { SessionService } from './session-service';
 import { getService } from './application';
 import { digest } from '../interview-practice/domain';
 import { parseRuntimeBinding, type RuntimeBinding } from '../runtime/binding';
+import { admittedRunSuite } from '../interview-practice/learner-checks';
+import type { RunSelection } from '../interview-practice/check-policy';
 
 class AdmittedInputMismatch extends Error {}
 class MissingRuntimeBinding extends Error {}
 
-async function executeAdmittedSnapshot(scenario: Scenario, files: Record<string, string>, signal: AbortSignal, runtimeBinding: RuntimeBinding): Promise<RunExecution> {
+async function executeAdmittedSnapshot(scenario: Scenario, files: Record<string, string>, signal: AbortSignal, runtimeBinding: RuntimeBinding, selection?: RunSelection): Promise<RunExecution> {
   if (!await executionAdmissionOpen()) return {
     status: 'infrastructure_error', command: 'execution admission', stdout: '',
     stderr: 'Execution is on an operational hold. Your work is saved; no code was executed.',
     exitCode: null, tests: [], durationMs: 0,
   };
-  try { return await executeScenario(scenario, files, { signal, includeProtected: true, runtimeBinding }); }
+  try { return await executeScenario(scenario, files, { signal, includeProtected: true, runtimeBinding, ...(selection === 'learner' ? { selection } : {}) }); }
   finally {
     if (runnerHealth().blockedReason !== null) await blockExecutionAdmission().catch(() => {
       // Preserve genuine execution observations. Admission also fails closed when storage is unavailable.
@@ -43,8 +45,11 @@ export async function processOneJob(service: SessionService, workerId = `worker-
     // execution or inference. Completion validation alone is too late to avoid
     // spending on a replaced same-version package or executing changed checks.
     if (!scenario || !snapshot || digest(scenario) !== session.scenarioDigest || digest(snapshot.files) !== snapshot.sha256
-      || (claim.job.kind === 'run' && (digest(claim.job.input) !== claim.job.fingerprint || claim.job.input.testSuiteDigest !== digest(scenario.tests) || digest(claim.job.input.runtime) !== digest(scenario.runtime)))) {
+      || (claim.job.kind === 'run' && (digest(claim.job.input) !== claim.job.fingerprint || digest(claim.job.input.runtime) !== digest(scenario.runtime)))) {
       throw new AdmittedInputMismatch();
+    }
+    if (claim.job.kind === 'run') {
+      try { admittedRunSuite(scenario, snapshot.files, claim.job.input); } catch { throw new AdmittedInputMismatch(); }
     }
     const runtimeBinding = claim.job.kind === 'run' ? parseRuntimeBinding(claim.job.input.runtimeBinding,scenario.runtime.image) : null;
     if (claim.job.kind === 'run' && !runtimeBinding) throw new MissingRuntimeBinding();
@@ -54,7 +59,7 @@ export async function processOneJob(service: SessionService, workerId = `worker-
     const signal = controller.signal;
     externalWorkStarted = true;
     const result = claim.job.kind === 'run'
-      ? { kind: 'run' as const, run: await executeAdmittedSnapshot(scenario, snapshot.files, signal, runtimeBinding!), actualUsd: 0 }
+      ? { kind: 'run' as const, run: await executeAdmittedSnapshot(scenario, snapshot.files, signal, runtimeBinding!, claim.job.input.selection === 'learner' ? 'learner' : undefined), actualUsd: 0 }
       : claim.job.kind === 'interviewer' ? (claim.job.input.forceAuthored ? { kind: 'interviewer' as const, proposal: authoredQuestion(scenario, session), model: 'authored', actualUsd: 0 } : await interview(scenario, session, signal))
       : claim.job.kind === 'assistant' ? await assist(scenario, session, claim.job.input, signal)
       : claim.job.input.forceAuthored ? { kind: 'coach' as const, report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 } : await coach(scenario, session, signal);

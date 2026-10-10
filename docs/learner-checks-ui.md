@@ -1,0 +1,27 @@
+# Learner regression-check interface
+
+The workspace’s **Your regression check** disclosure provides a separate optional editor for `learner_checks.py`. It does not create the file, insert source, or request execution when the page loads. The learner can type a Python `unittest.TestCase` or explicitly insert a failing starter. That starter contains a placeholder failure, so it cannot supply a passing observation without an intentional change.
+
+The client imports only the pure `check-policy` constants. The current slot allows 8,000 UTF-8 bytes with a fixed three-second check timeout; these bounds remain enforced on the server. The editor counts encoded bytes rather than JavaScript characters. Oversized/null-containing source disables its save/run buttons and shows an error without truncating the local source. The shared workspace autosave can independently reject invalid source, while the local draft remains available to shorten or repair it. Empty source cannot request execution. An authored package that already reserves the slot or fixed test ID shows an unavailable state and retains its original meaning.
+
+## Save and explicit execution
+
+Editing the check updates the same full-file workspace and local draft as the implementation editor. **Save check source** invokes the existing save path. **Run my regression check** invokes the existing mutation path with `selection: "learner"`; a new action saves all current workspace files first, then admits execution against the acknowledged revision. No inline source, custom command, dependency, policy ID, or test ID is supplied in the run request.
+
+The default **Run tests** button still supplies an empty semantic body and runs the authored scenario suite, including protected contracts. Adding a learner file does not change that default selection. Both actions use the existing run quota, saved snapshots, cancellation and retry mechanisms. Unconfigured runner state permits editing/saving while showing that behavior is unverified; it does not synthesize execution. Frozen/paused workspaces and pending jobs disable learner editing and execution controls.
+
+The check panel distinguishes unsaved source from source matching the acknowledged workspace. A local browser SHA-256 comparison identifies whether the current check text matches the most recent learner run’s recorded source. A match refers only to that source file: implementation files may have changed. A mismatch keeps the earlier result attached to its original source/snapshot instead of implying that a later draft was executed. If browser digest support is unavailable, the UI presents the recorded references and says that comparison is unavailable.
+
+## Results and interrupted actions
+
+Learner results have their own origin label, check count, source SHA, code snapshot reference, and policy version. Their visible qualification says they do not establish that authored or protected checks passed. When a learner result is newest, an earlier authored result remains separately expandable with its own snapshot and an explicit warning about later edits. A learner-only attempt says that no authored run is recorded. Saved completed-review content retains the learner result origin and source file for inspection.
+
+A completed zero-discovery observation displays **No unittest checks were discovered.** as a visible error and records zero passing checks. A printed success message is only escaped execution output. Infrastructure failure and timeout preserve their existing technical statuses; they do not become a learner skill judgment. Passing a trivial learner check does not establish useful coverage, independent correctness, or test quality.
+
+The run selection forms part of the existing pending semantic intent. An interrupted learner request appears as **Recover learner checks**; an interrupted default request is **Recover authored checks**. A pending learner-run response disables another learner-run start and points to its explicit recovery control; later source can still be repaired and saved. An explicit retry keeps its exact original body, request key, revision and selection across refresh. Editing and saving later source does not redirect an admitted or recovered run to that newer source. No retry is sent automatically. Existing replay-age checks, source-save conflicts, identity verification and error recovery remain in force.
+
+## Verification and open qualification
+
+`tests/e2e/learner-checks.spec.ts` intercepts every API call with explicit HTTP fixtures. It verifies no automatic file creation/execution, keyboard reachability, a narrow viewport, full-file save before run, default/authored selection, separate learner provenance, zero discovery, safe output escaping, source-hash comparison, unconfigured/frozen/paused/pending states, UTF-8 bounds without truncation, save conflict, exact lost-acknowledgement replay after later source edits, reserved authored slots, and completed saved-review source.
+
+These are learner UI and transport-contract checks; the test bodies explicitly identify injected observations and do not run Python or protected contracts. Backend policy/worker/persistence evidence and outstanding real-container/SQL qualification are documented separately in `docs/learner-checks.md`. No Docker, live inference, speech, or payment call is needed by the browser suite. Human review of whether an authored learner regression detects a meaningful bug remains an external content/learning evaluation gate.
