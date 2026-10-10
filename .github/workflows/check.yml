@@ -55,7 +55,7 @@ jobs:
           provision "$CI_PYTHON_IMAGE" python:3.11-slim
           provision "$CI_POSTGRES_IMAGE" postgres:16-alpine
       - run: FOUNDRY_DOCKER_INTEGRATION=1 npm test -- tests/runner.test.ts
-      - run: RUN_POSTGRES_INTEGRATION=1 npm test -- tests/postgres.integration.test.ts tests/billing.integration.test.ts tests/voice-postgres.integration.test.ts tests/review-postgres.integration.test.ts
+      - run: RUN_POSTGRES_INTEGRATION=1 npm test -- tests/postgres.integration.test.ts tests/billing.integration.test.ts tests/voice-postgres.integration.test.ts tests/review-postgres.integration.test.ts tests/retention-postgres.integration.test.ts
       - run: FOUNDRY_OPERATIONS_QUALIFICATION=1 node --conditions=react-server --import tsx scripts/operations/qualify.ts --output work/operations-qualification.json
       - run: node --conditions=react-server --import tsx scripts/operations/reconcile.ts
       - uses: actions/upload-artifact@v4
