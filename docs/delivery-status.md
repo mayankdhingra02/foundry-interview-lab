@@ -30,6 +30,8 @@ The configured second-provider follow-up adds a default-disabled Anthropic Messa
 
 The five preserved benchmark packages are Monetary Validation, Extension Compatibility, Duplicate Invoice Incident, Inventory Reservations, and Event Rollup. Three additional Stock Foundations, Stock Retries and Stock Lifecycle drafts cover distinct Junior/Mid-level/Senior contracts in the inventory family; they require independent calibration. The [content review](content-review.md) process defines the independent approval required for each version. This repository preserves the existing Engineering Foundry source rather than modifying its production checkout.
 
+Mayank has chosen friends and family as the proposed pilot recruitment pool and will coordinate recruitment and evidence. No actual participants, qualified independent reviewers or pilot outcomes are confirmed. The [pilot coordination handoff](pilot-coordination.md) records the roles, private worksheet and unsent invitation; all existing acceptance gates remain open.
+
 ## Architecture and ownership
 
 The Next application authenticates the owner, validates commands and admits durable work. A deterministic session service owns lifecycle, stage, files, immutable evidence, replay and budgets. A separate worker obtains fenced leases and performs external execution or inference outside transactions. PostgreSQL stores normalized private entities; local file storage is development-only. The current aggregate adapter serializes trusted writes and has explicit row/byte safety limits; it is a narrow-beta correctness adapter, not demonstrated large-scale storage.
