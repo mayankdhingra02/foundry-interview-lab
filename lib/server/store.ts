@@ -1,0 +1,98 @@
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import { DomainError } from '../interview-practice/domain';
+import type { PracticeDatabase } from '../interview-practice/types';
+
+export const emptyDatabase = (): PracticeDatabase => ({ schemaVersion: 1, sessions: {}, requests: {}, ledger: [], deletions: [] });
+export interface PracticeStore {
+  read(): Promise<PracticeDatabase>;
+  transaction<T>(operation: (database: PracticeDatabase) => T | Promise<T>): Promise<T>;
+}
+// This adapter deliberately targets one local machine. Public deployments must select a qualified database adapter.
+export class FilePracticeStore implements PracticeStore {
+  readonly file: string;
+  readonly lock: string;
+  constructor(readonly directory: string, private readonly lockTimeoutMs = 10_000) {
+    this.file = join(directory, 'practice.json'); this.lock = join(directory, '.transaction-lock');
+  }
+  private async load(): Promise<PracticeDatabase> {
+    try {
+      const value = JSON.parse(await readFile(this.file, 'utf8')) as PracticeDatabase;
+      if (value.schemaVersion !== 1 || !value.sessions || !value.requests || !Array.isArray(value.ledger) || !Array.isArray(value.deletions)) throw new Error('invalid_store');
+      return value;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyDatabase();
+      throw new DomainError('unavailable', 'Practice storage could not be read. The existing data was not overwritten.');
+    }
+  }
+  async read(): Promise<PracticeDatabase> { return structuredClone(await this.load()); }
+  private async recoverAbandonedLock() {
+    const recovery = join(this.directory, '.lock-recovery');
+    try { await mkdir(recovery, { mode: 0o700 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return; throw error; }
+    try {
+      // Only one reclaimer examines/removes a dead lock. Contenders cannot remove a successor's live lock.
+      let abandoned = false;
+      try {
+        const owner = JSON.parse(await readFile(join(this.lock, 'owner.json'), 'utf8')) as { pid: number };
+        if (Number.isSafeInteger(owner.pid) && owner.pid > 0) {
+          try { process.kill(owner.pid, 0); }
+          catch (error) { abandoned = (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          const metadata = await stat(this.lock).catch(() => null);
+          abandoned = metadata !== null && Date.now() - metadata.mtimeMs > 30_000;
+        }
+      }
+      if (abandoned) await rm(this.lock, { recursive: true, force: true });
+    } finally { await rm(recovery, { recursive: true, force: true }); }
+  }
+  private async acquire(): Promise<() => Promise<void>> {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const started = Date.now();
+    for (;;) {
+      try {
+        await mkdir(this.lock, { mode: 0o700 });
+        try { await writeFile(join(this.lock, 'owner.json'), JSON.stringify({ pid: process.pid, token: randomUUID() }), { mode: 0o600 }); }
+        catch (error) { await rm(this.lock, { recursive: true, force: true }); throw error; }
+        return () => rm(this.lock, { recursive: true, force: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        await this.recoverAbandonedLock();
+        if (Date.now() - started >= this.lockTimeoutMs) throw new DomainError('unavailable', 'Practice storage is busy. Retry the same request key.');
+        await delay(25);
+      }
+    }
+  }
+  async transaction<T>(operation: (database: PracticeDatabase) => T | Promise<T>): Promise<T> {
+    const release = await this.acquire();
+    const temp = join(this.directory, `.${randomUUID()}.tmp`);
+    try {
+      const database = await this.load(), result = await operation(database);
+      const handle = await open(temp, 'wx', 0o600);
+      try { await handle.writeFile(JSON.stringify(database)); await handle.sync(); } finally { await handle.close(); }
+      await rename(temp, this.file);
+      const directory = await open(this.directory, 'r');
+      try { await directory.sync(); } finally { await directory.close(); }
+      return structuredClone(result);
+    } finally { await rm(temp, { force: true }).catch(() => undefined); await release(); }
+  }
+}
+export class MemoryPracticeStore implements PracticeStore {
+  private database = emptyDatabase();
+  private tail: Promise<void> = Promise.resolve();
+  async read() { await this.tail; return structuredClone(this.database); }
+  async transaction<T>(operation: (database: PracticeDatabase) => T | Promise<T>): Promise<T> {
+    const previous = this.tail;
+    let release!: () => void;
+    this.tail = new Promise(resolve => { release = resolve; });
+    await previous;
+    try {
+      const copy = structuredClone(this.database), result = await operation(copy);
+      this.database = copy; return structuredClone(result);
+    } finally { release(); }
+  }
+}
