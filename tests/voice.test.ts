@@ -8,7 +8,7 @@ import { mp3Duration, wavDuration } from '../lib/voice/audio';
 import { reserveVoice, settleVoice } from '../lib/voice/ledger';
 import { boundedBytes, VoiceService } from '../lib/voice/provider';
 
-const config: VoiceConfig = { apiKey: 'fixture-not-a-key', sttUsdPerMinute: 0.0043, ttsUsdPerThousandChars: 0.03, sessionMinutes: 20, userDailyMinutes: 60, globalDailyMinutes: 600, sessionUsd: 1, userDailyUsd: 5, globalDailyUsd: 50 };
+const config: VoiceConfig = { apiKey: 'fixture-not-a-key', sttUsdPerMinute: 0.0043, ttsUsdPerThousandChars: 0.03, sessionMinutes: 20, userDailyMinutes: 60, globalDailyMinutes: 600, sessionUsd: 1, userDailyUsd: 5, userMonthlyUsd: 50, globalDailyUsd: 50 };
 const at = new Date('2026-10-09T12:00:00Z');
 function wav(seconds = 1) {
   const buffer = Buffer.alloc(44 + seconds * 32_000);
@@ -31,9 +31,11 @@ const admission = (overrides = {}) => ({ ownerId: 'owner-a', sessionId, requestI
 
 describe('voice availability and bounded formats', () => {
   it('fails closed without qualification, explicit rates, limits, or production database', () => {
-    const env = { FEATURE_VOICE: 'true', VOICE_QUALIFIED: 'true', DEEPGRAM_API_KEY: 'test-only', VOICE_STT_USD_PER_MINUTE: '.0043', VOICE_TTS_USD_PER_1K_CHARS: '.03', VOICE_MAX_SESSION_MINUTES: '20', VOICE_MAX_USER_DAILY_MINUTES: '60', VOICE_MAX_GLOBAL_DAILY_MINUTES: '600', MAX_SESSION_USD: '1', MAX_DAILY_USER_USD: '5', VOICE_MAX_GLOBAL_DAILY_USD: '50' };
+    const env = { FEATURE_VOICE: 'true', VOICE_QUALIFIED: 'true', DEEPGRAM_API_KEY: 'test-only', VOICE_STT_USD_PER_MINUTE: '.0043', VOICE_TTS_USD_PER_1K_CHARS: '.03', VOICE_MAX_SESSION_MINUTES: '20', VOICE_MAX_USER_DAILY_MINUTES: '60', VOICE_MAX_GLOBAL_DAILY_MINUTES: '600', MAX_SESSION_USD: '1', MAX_DAILY_USER_USD: '5', MAX_MONTHLY_USER_USD: '50', VOICE_MAX_GLOBAL_DAILY_USD: '50' };
     expect(voiceConfig(env)).toMatchObject({ sttUsdPerMinute: .0043 });
     expect(voiceConfig({ ...env, VOICE_QUALIFIED: 'false' })).toBeNull();
+    expect(voiceConfig({ ...env, MAX_MONTHLY_USER_USD: '' })).toBeNull();
+    expect(voiceConfig({ ...env, MAX_MONTHLY_USER_USD: 'NaN' })).toBeNull();
     expect(voiceConfig({ ...env, VOICE_STT_USD_PER_MINUTE: '.001' })).toBeNull();
     expect(voiceConfig({ ...env, VOICE_MAX_GLOBAL_DAILY_MINUTES: 'Infinity' })).toBeNull();
     expect(voiceConfig({ ...env, NODE_ENV: 'production' })).toBeNull();
@@ -66,6 +68,16 @@ describe('speech boundary and ephemeral results', () => {
     await store.transaction(db => { db.sessions[sessionId].lifecycle = 'paused'; });
     await expect(voice().transcribe('owner-a', sessionId, randomUUID(), wav(), true)).rejects.toMatchObject({ code: 'conflict' });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('checks shared monthly AI commitments before calling a speech provider even when daily budget is available', async () => {
+    const priorDay = '2026-10-08T12:00:00.000Z';
+    await store.transaction(db => {
+      db.ledger.push({ id: randomUUID(), ownerId: 'owner-a', sessionId, operationId: 'prior-ai:1:reserve', kind: 'reservation', amountUsd: .08, createdAt: priorDay, budgetAt: priorDay });
+    });
+    const limited = new VoiceService(store, { ...config, userMonthlyUsd: .08 }, fetcher, () => at);
+    await expect(limited.transcribe('owner-a', sessionId, randomUUID(), wav(), true)).rejects.toMatchObject({ code: 'quota' });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect((await store.read()).ledger.filter(entry => entry.operationId.startsWith('voice:'))).toHaveLength(0);
   });
   it('sends binary WAV with opt-out and returns a draft without committing or persisting audio or transcript', async () => {
     fetcher.mockResolvedValue(recognized());
@@ -118,7 +130,7 @@ describe('atomic speech admission', () => {
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
     expect((await store.read()).ledger.filter(entry => entry.kind === 'reservation')).toHaveLength(1);
   });
-  it.each(['sessionMinutes', 'userDailyMinutes', 'globalDailyMinutes', 'sessionUsd', 'userDailyUsd', 'globalDailyUsd'] as const)('enforces %s across simultaneous requests', async scope => {
+  it.each(['sessionMinutes', 'userDailyMinutes', 'globalDailyMinutes', 'sessionUsd', 'userDailyUsd', 'userMonthlyUsd', 'globalDailyUsd'] as const)('enforces %s across simultaneous requests', async scope => {
     const secondOwner = scope.startsWith('global') ? 'owner-b' : 'owner-a';
     const secondId = scope.startsWith('session') ? sessionId : (await sessions.createSession(secondOwner, { scenarioId: 'monetary-validation', requestId: randomUUID() })).session.id;
     const limited = { ...config, [scope]: scope.endsWith('Minutes') ? 1 : .3 };

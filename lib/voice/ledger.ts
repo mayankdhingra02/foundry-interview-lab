@@ -51,12 +51,12 @@ export async function reserveVoice(store: PracticeStore, config: VoiceConfig, in
     const userSeconds = usage(dailyVoice.filter(entry => entry.ownerId === input.ownerId));
     const globalSeconds = usage(dailyVoice);
     const sessionUsd = session.usage.reservedUsd + session.usage.spentUsd + session.usage.uncertainUsd;
-    const { userDailyUsd: userUsd, globalDailyUsd: globalUsd } = budgetTotals(database.ledger, input.ownerId, at);
+    const { userDailyUsd: userUsd, userMonthlyUsd, globalDailyUsd: globalUsd } = budgetTotals(database.ledger, input.ownerId, at);
     const terminal = new Set(voice.filter(entry => entry.voice.state !== 'reserved').map(entry => entry.voice.key));
     const pending = voice.filter(entry => entry.voice.state === 'reserved' && !terminal.has(entry.voice.key));
     if (pending.length >= 32 || pending.filter(entry => entry.ownerId === input.ownerId).length >= 2) throw new DomainError('quota', 'A voice request is already in progress. Continue in text and try again later.');
     if (sessionSeconds + input.seconds > config.sessionMinutes * 60 || userSeconds + input.seconds > config.userDailyMinutes * 60 || globalSeconds + input.seconds > config.globalDailyMinutes * 60 ||
-        sessionUsd + input.usd > config.sessionUsd + 1e-9 || userUsd + input.usd > config.userDailyUsd + 1e-9 || globalUsd + input.usd > config.globalDailyUsd + 1e-9) throw new DomainError('quota', 'The voice budget cannot cover this request. Continue with text; your saved work is available.');
+        sessionUsd + input.usd > config.sessionUsd + 1e-9 || userUsd + input.usd > config.userDailyUsd + 1e-9 || userMonthlyUsd + input.usd > config.userMonthlyUsd + 1e-9 || globalUsd + input.usd > config.globalDailyUsd + 1e-9) throw new DomainError('quota', 'The voice budget cannot cover this request. Continue with text; your saved work is available.');
     const reservation: VoiceReservation = { ...input, key: `voice:${randomUUID()}`, at };
     session.usage.reservedUsd += input.usd;
     session.usage.voiceAllocatedSeconds = sessionSeconds + input.seconds;

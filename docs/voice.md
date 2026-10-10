@@ -39,7 +39,7 @@ Admission checks:
 
 - Ownership, active lifecycle, unique owner-scoped request key.
 - Per-session lifetime, per-user UTC-day, and global UTC-day allocated voice minutes. A cumulative session counter preserves its limit after old ledger rows expire.
-- Session committed spend and user/global UTC-day ledger spend, including existing AI commitments.
+- Session committed spend, user UTC-day/month ledger spend, and global UTC-day ledger spend, including existing AI commitments. Voice shares AI's `MAX_MONTHLY_USER_USD` setting.
 - At most two pending speech requests per user and 32 globally.
 
 STT allocates its verified capture duration. Each TTS request allocates the full two-minute playback allowance, even for a shorter question. Allocated minutes are deliberately conservative quota units, not a measurement of actual speaking time. Failed or interrupted requests do not refund those minutes.
@@ -65,6 +65,7 @@ VOICE_MAX_USER_DAILY_MINUTES=60
 VOICE_MAX_GLOBAL_DAILY_MINUTES=600
 MAX_SESSION_USD=1
 MAX_DAILY_USER_USD=5
+MAX_MONTHLY_USER_USD=50
 VOICE_MAX_GLOBAL_DAILY_USD=50
 ```
 

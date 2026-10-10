@@ -19,7 +19,7 @@ function form() { const result = new FormData(); result.append('audio', recordin
 const upload = (body: FormData) => new Request(`${origin}/api/interview-practice/sessions/${id}/voice/transcribe`, { method: 'POST', headers: { origin }, body });
 const speech = (body: object) => new Request(`${origin}/api/interview-practice/sessions/${id}/voice/speak`, { method: 'POST', headers: { origin, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 beforeEach(async () => {
-  for (const [key, value] of Object.entries({ APP_URL: origin, FEATURE_VOICE: 'true', VOICE_QUALIFIED: 'true', DEEPGRAM_API_KEY: 'fixture-never-sent', VOICE_STT_USD_PER_MINUTE: '.0043', VOICE_TTS_USD_PER_1K_CHARS: '.03', VOICE_MAX_SESSION_MINUTES: '20', VOICE_MAX_USER_DAILY_MINUTES: '60', VOICE_MAX_GLOBAL_DAILY_MINUTES: '600', MAX_SESSION_USD: '1', MAX_DAILY_USER_USD: '5', VOICE_MAX_GLOBAL_DAILY_USD: '50' })) vi.stubEnv(key, value);
+  for (const [key, value] of Object.entries({ APP_URL: origin, FEATURE_VOICE: 'true', VOICE_QUALIFIED: 'true', DEEPGRAM_API_KEY: 'fixture-never-sent', VOICE_STT_USD_PER_MINUTE: '.0043', VOICE_TTS_USD_PER_1K_CHARS: '.03', VOICE_MAX_SESSION_MINUTES: '20', VOICE_MAX_USER_DAILY_MINUTES: '60', VOICE_MAX_GLOBAL_DAILY_MINUTES: '600', MAX_SESSION_USD: '1', MAX_DAILY_USER_USD: '5', MAX_MONTHLY_USER_USD: '50', VOICE_MAX_GLOBAL_DAILY_USD: '50' })) vi.stubEnv(key, value);
   store = new MemoryPracticeStore(); const service = new SessionService(store, getScenario);
   id = (await service.createSession('owner-a', { scenarioId: 'monetary-validation', requestId: randomUUID() })).session.id;
   mocked.getService.mockResolvedValue(service); fetcher.mockReset(); vi.stubGlobal('fetch', fetcher);

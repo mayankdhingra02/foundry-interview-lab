@@ -24,7 +24,7 @@ This is application quota attribution, rather than a promise about a provider in
 
 `SessionService.reserve` calls the shared helper inside the existing store transaction for owner daily/monthly and global daily USD checks. It then appends the reservation and updates the session commitment. `settle` appends the actual delta or uncertainty marker with original-window metadata. A lease takeover keeps the earlier reservation uncertain and creates a separately numbered new reservation in the retry's own window. Stale worker results remain fenced and cannot create a later credit.
 
-`reserveVoice` uses the same helper for its owner/global daily USD checks, so AI settlement credits cannot fund extra speech after midnight. Voice minute accounting stays conservative and follows the original reserved seconds. Speech terminal postings continue to carry a zero USD delta; failed or short playback does not refund allocated minutes or the bounded reserved speech cost.
+`reserveVoice` uses the same helper for its owner daily/monthly and global daily USD checks, so AI settlement credits cannot fund extra speech after midnight. Voice reads the same `MAX_MONTHLY_USER_USD` setting as AI; an absent or invalid monthly cap disables voice configuration. The monthly check happens atomically before the speech provider is called, even when a new UTC day has generous daily allowance. Voice minute accounting stays conservative and follows the original reserved seconds. Speech terminal postings continue to carry a zero USD delta; failed or short playback does not refund allocated minutes or the bounded reserved speech cost.
 
 The file adapter stores `budgetAt` in the existing ledger JSON. The PostgreSQL adapter already persists the complete ledger entity in its bounded normalized `runtime_payload`, so this optional field needs no new SQL column or migration. Legacy data is read compatibly without rewriting historical rows. No new PostgreSQL runtime qualification is claimed for this quota change until its CI tests execute.
 
@@ -32,14 +32,18 @@ The file adapter stores `budgetAt` in the existing ledger JSON. The PostgreSQL a
 
 Lab-data/session deletion continues to remove private attempts while preserving content-free quota postings under the existing 62-day policy. Shared identity and separate commerce consumption are unchanged. Window reconstruction uses retained ledger identity, rather than a live session or job, so deleting an attempt cannot make a refund credit migrate into another day or reset spend.
 
+Before erasing private jobs, both session and Lab-account deletion append a zero-actual-cost settlement for queued jobs, which are known not to have called a provider. Running jobs with a positive reservation receive an uncertainty marker, retaining their original commitment. Running zero-cost work receives a zero settlement. Terminal jobs are left unchanged, and replaying the same deletion key adds no postings. The removed session/job identity fences late worker heartbeat, completion, and failure calls. Neither prompts nor late responses survive erasure in request caches or ledger metadata.
+
+Voice requests execute outside the durable job queue. Deletion leaves an in-flight voice reservation pending until its actual callback can record success or uncertainty; deletion itself does not guess a provider result. A callback never recreates the private attempt or releases reserved speech cost/minutes. If the process dies before a callback, its content-free reservation remains held for explicit reconciliation. Released queued AI groups can expire together after the retention window; pending and uncertain groups remain held under the conservative retention policy.
+
 Retention must remove eligible financial groups together. Do not prune an original reservation while retaining a settlement/uncertain posting that depends on it, or remove still-relevant current-window budget references. Pending, uncertain, orphan, and ambiguous groups require the separately documented conservative retention policy. The grouping helper is available so the retention CLI can reuse the same owner/session/sequence identity. `createdAt` remains the actual posting timestamp and the current SQL expiry source; `budgetAt` is not permission to expire a newer posting early.
 
 ## Validation
 
-Twenty-two deterministic quota tests cover UTC day/month boundaries; legacy and offset timestamps; exact owner/session/retry association; orphan and overlarge credits; duplicate/uncertain terminals; invalid metadata; unchanged inference clocks; lease takeover; deletion/recreation; and shared AI/voice owner/global caps. They use synthetic job outcomes and no provider calls or spending.
+Deterministic quota tests cover UTC day/month boundaries; legacy and offset timestamps; exact owner/session/retry association; orphan and overlarge credits; duplicate/uncertain terminals; invalid metadata; unchanged inference clocks; lease takeover; queued/running/terminal deletion and recreation; stale worker fencing; pending voice deletion; and shared AI/voice owner daily/monthly and global caps. They use synthetic job outcomes and no provider calls or spending.
 
 ```sh
-npm test -- tests/quota.test.ts tests/domain.test.ts tests/voice.test.ts
+npm test -- tests/quota.test.ts tests/quota-deletion.test.ts tests/domain.test.ts tests/voice.test.ts tests/worker.test.ts
 npm run typecheck
 npx eslint lib/interview-practice/quota.ts lib/server/session-service.ts lib/voice/ledger.ts tests/quota.test.ts
 ```

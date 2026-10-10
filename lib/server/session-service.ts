@@ -363,7 +363,14 @@ export class SessionService {
     });
   }
   private removeSession(db: PracticeDatabase, ownerId: string, id: string, now: string) {
-    ownedSession(db.sessions, ownerId, id);
+    const session = ownedSession(db.sessions, ownerId, id);
+    // No private job survives erasure to settle this reservation later. Queued
+    // work is known not to have called a provider; running work remains uncertain.
+    // Terminal jobs already have a posting and must never receive a duplicate.
+    for (const job of session.jobs) {
+      if (job.state === 'queued') this.settle(db, session, job, now, 0, true);
+      else if (job.state === 'running') this.settle(db, session, job, now);
+    }
     // The filesystem adapter embeds artifacts in one store. Its atomic rewrite erases them; inventory is empty.
     db.deletions.push({ id: randomUUID(), ownerId, sessionId: id, createdAt: now, state: 'completed', objectKeys: [], completedAt: now });
     delete db.sessions[id];
