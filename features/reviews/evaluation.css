@@ -12,6 +12,8 @@
 .evaluation-detail h3 { margin:0 0 12px; font-size:18px; }
 .evaluation-detail h4 { margin:24px 0 10px; font-size:15px; }
 .evaluation-detail blockquote { margin:12px 0; padding:8px 14px; border-left:2px solid var(--line); white-space:pre-wrap; }
+.evaluation-output-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+.evaluation-detail h5 { margin:16px 0 6px; font-size:14px; }
 .evaluation-metadata { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; }
 .evaluation-metadata dt { color:var(--muted); font-size:12px; }
 .evaluation-metadata dd { margin:4px 0 0; }
