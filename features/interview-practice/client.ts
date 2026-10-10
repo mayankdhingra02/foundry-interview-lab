@@ -1,5 +1,7 @@
 "use client";
 
+import { practiceRoutes } from "../../lib/interview-practice/routes";
+
 const referencePattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 function isReference(value: unknown): value is string { return typeof value === "string" && value.length === 36 && referencePattern.test(value); }
 function supportReference(status: number, detail: unknown, header?: string | null): string | undefined {
@@ -22,7 +24,7 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/interview-practice${path}`, {
+  const response = await fetch(`${practiceRoutes().api.practice}${path}`, {
     credentials: "same-origin", cache: "no-store", ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
   });
