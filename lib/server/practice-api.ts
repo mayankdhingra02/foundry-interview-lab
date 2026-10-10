@@ -44,7 +44,11 @@ export async function practiceApi(request: Request, path: string[]) {
       return privateJson(withFoundryNavigation(buildProgression(sessions, admittedScenarios(catalog), { selectedCompetencies: goals })));
     }
     if (path[0] === 'sessions' && path.length === 1) {
-      if (method === 'GET') return privateJson({ sessions: await service.listSessions(actor.id) });
+      if (method === 'GET') {
+        const intendedOwner = request.headers.get('x-practice-owner');
+        if (intendedOwner !== null && intendedOwner !== actor.id) throw new HttpError(409, 'owner_changed', 'Your account changed. Review the signed-in account before deleting practice data.');
+        return privateJson({ sessions: await service.listSessions(actor.id) });
+      }
       if (method === 'POST') {
         const result = await service.createSession(actor.id, parsed(creation, await readJson(request, 5000)));
         return privateJson({ ...result, capabilities: capabilities() }, 201);
@@ -60,7 +64,11 @@ export async function practiceApi(request: Request, path: string[]) {
       const session = await service.getSession(actor.id, id); kickLocalWorker();
       return privateJson({ session, scenario: session.scenario, capabilities: capabilities() });
     }
-    if (path.length === 2 && method === 'DELETE') return privateJson(await service.deleteSession(actor.id, id, parsed(key, await readJson(request, 2000))));
+    if (path.length === 2 && method === 'DELETE') {
+      const intendedOwner = request.headers.get('x-practice-owner');
+      if (intendedOwner !== null && intendedOwner !== actor.id) throw new HttpError(409, 'owner_changed', 'Your account changed. Review the signed-in account before deleting practice data.');
+      return privateJson(await service.deleteSession(actor.id, id, parsed(key, await readJson(request, 2000))));
+    }
     if (operation === 'voice' && path.length === 4 && ['transcribe', 'speak'].includes(path[3])) return handleVoiceRequest(request, actor.id, id, path[3] as 'transcribe' | 'speak');
     if (path.length !== 3) throw new HttpError(404, 'not_found', 'Endpoint not found.');
     if (operation === 'reviews') return ownerReviews(request, id);
