@@ -27,16 +27,17 @@ async function fixtures(page: Page) {
 }
 
 test('approved output is read-only escaped content, separate from blocked quality; filters work by keyboard/mobile', async ({ page }, testInfo) => {
-  await fixtures(page); const filter = page.getByLabel('Display approval', { exact: true });
+  await fixtures(page); const panel = page.getByRole('tabpanel', { name: 'Evaluation', exact: true }); const filter = panel.getByRole('combobox', { name: 'Display approval', exact: true });
   await filter.selectOption('approved'); await filter.focus(); await page.keyboard.press('Tab'); await expect(page.getByRole('button', { name: 'Refresh examples' })).toBeFocused();
   await expect(page.getByRole('button', { name: /fixture-pending/ })).toHaveCount(0);
   await page.getByRole('button', { name: /fixture-approved/ }).click();
   const detail = page.getByRole('article', { name: 'Synthetic example detail' });
   await expect(detail.getByRole('region', { name: 'Approved candidate output' })).toContainText('DISPLAY-ONLY-MODEL-OUTPUT <script>');
-  await expect(page.getByRole('status')).toContainText('AI qualification: blocked');
+  await expect(panel.getByRole('status')).toContainText('AI qualification: blocked');
   await expect(detail).toContainText('it does not establish that the findings are correct');
   expect(await page.evaluate(() => 'approvalInjected' in window)).toBe(false);
   await detail.getByText('Evidence identifiers and immutable metadata', { exact: true }).click(); await expect(detail).toContainText('turn:fixture-answer');
+  await detail.getByRole('heading', { name: 'Approved candidate output', exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: testInfo.outputPath('approved-output-desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await detail.getByRole('heading', { name: 'Approved candidate output', exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: testInfo.outputPath('approved-output-mobile.png') });
 });
@@ -51,9 +52,9 @@ test('refresh removes revoked output instead of retaining content behind a badge
 });
 
 test('unapproved or invalidated source never retains the previously displayed report/proposal', async ({ page }) => {
-  await fixtures(page); await page.getByRole('button', { name: /fixture-pending/ }).click(); await expect(page.getByRole('region', { name: 'Approved candidate output' })).toHaveCount(0);
+  await fixtures(page); const panel = page.getByRole('tabpanel', { name: 'Evaluation', exact: true }); await page.getByRole('button', { name: /fixture-pending/ }).click(); await expect(page.getByRole('region', { name: 'Approved candidate output' })).toHaveCount(0);
   await page.getByRole('button', { name: /fixture-approved/ }).click(); await expect(page.getByText(/DISPLAY-ONLY-MODEL-OUTPUT/)).toBeVisible();
   await page.route('**/api/internal/evaluations', route => route.fulfill({ status: 503, json: { error: { message: 'The configured evaluation review artifact is unavailable or invalid. No approved content is displayed.' } } }));
-  await page.getByRole('button', { name: 'Refresh examples' }).click(); await expect(page.getByRole('alert')).toContainText('No approved content is displayed.');
+  await page.getByRole('button', { name: 'Refresh examples' }).click(); await expect(panel.getByRole('alert')).toContainText('No approved content is displayed.');
   await expect(page.getByText(/DISPLAY-ONLY-MODEL-OUTPUT/)).toHaveCount(0); await expect(page.getByRole('region', { name: 'Approved candidate output' })).toHaveCount(0);
 });
