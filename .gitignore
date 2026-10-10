@@ -37,3 +37,6 @@ Thumbs.db
 .idea/
 .vscode/
 ~$*.docx
+*.tsbuildinfo
+playwright-report/
+test-results/
