@@ -1,32 +1,35 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { assist, coach, interview, PROMPT_VERSION, ProviderFailure } from '../lib/ai/provider';
-import { inferenceReservations, modelPolicy, type AiRole } from '../lib/ai/policy';
+import { modelPolicy, type AiRole } from '../lib/ai/policy';
+import type { InferenceBinding } from '../lib/ai/binding';
 import { capabilities } from '../lib/server/config';
 import { digest, validateFiles } from '../lib/interview-practice/domain';
 import { coachOutputSchema, interviewProposalSchema, validateInterviewProposal, validateReport } from '../lib/interview-practice/evidence';
 import type { JobResult, Session } from '../lib/interview-practice/types';
 import { attemptContextDigest, type BenchmarkAttempt } from './benchmark';
+import { captureEvaluationBindings, hasBoundInferenceFields, recordedBindingsSchema, validateBoundEvaluationInference, validateEvaluationBindings } from './inference-binding';
 
 export const EVALUATION_ROLES = ['interviewer', 'coach', 'assistant-ask', 'assistant-plan', 'assistant-edit'] as const;
 export type EvaluationRole = typeof EVALUATION_ROLES[number];
 const roleSchema = z.enum(EVALUATION_ROLES);
 const finiteUsd = z.number().finite().nonnegative();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
-const inferenceSchema = z.object({ requestedModel: z.string().min(1), returnedModel: z.string().min(1), promptVersion: z.string().min(1), inputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative(), providerRequestId: z.string().optional(), responseId: z.string().optional(), startedAt: z.string().datetime(), completedAt: z.string().datetime(), usd: finiteUsd, validated: z.boolean() }).strict();
+const inferenceSchema = z.object({ requestedModel: z.string().min(1), returnedModel: z.string().min(1), promptVersion: z.string().min(1), inputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative(), providerRequestId: z.string().optional(), responseId: z.string().optional(), startedAt: z.string().datetime(), completedAt: z.string().datetime(), usd: finiteUsd, validated: z.boolean(), provider: z.literal('openai-responses').optional(), role: z.enum(['interviewer', 'assistant', 'coach']).optional(), schemaVersion: z.string().min(1).max(100).optional(), contextVersion: z.string().min(1).max(100).optional(), bindingDigest: hash.optional() }).strict();
 const assistantOutputSchema = z.object({ message: z.string().trim().min(1).max(16000), files: z.record(z.string().max(64000)) }).strict();
 const outputSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('interviewer'), proposal: interviewProposalSchema }).strict(), z.object({ kind: z.literal('coach'), report: coachOutputSchema }).strict(), z.object({ kind: z.literal('assistant'), ...assistantOutputSchema.shape }).strict()]);
 const plannedTaskSchema = z.object({ caseId: z.string().min(1), role: roleSchema, contextDigest: hash, reservedUsd: finiteUsd, scenarioId: z.string().min(1), scenarioVersion: z.string().min(1), scenarioDigest: hash, rubricVersion: z.string().min(1), evidenceDigest: hash, runtimeDigests: z.array(z.string().regex(/^sha256:[a-f0-9]{64}$/).nullable()).max(100) }).strict();
 export const roleRunSchema = z.object({
   version: z.literal(1), provenance: z.literal('operator-model-evaluation'), corpus: z.literal('development-regression'), benchmarkVersion: z.string().min(1), benchmarkDigest: hash, runId: z.string().uuid(),
   policy: z.object({ model: z.string().min(1), inputRate: finiteUsd, outputRate: finiteUsd, maxOutput: z.number().int().positive() }).strict(), promptVersion: z.string().min(1), createdAt: z.string().datetime(),
+  inferenceBindings: recordedBindingsSchema.optional(),
   state: z.enum(['running', 'completed', 'stopped']), stopReason: z.enum(['uncertain-charge', 'cost-bound-exceeded']).nullable(),
   planned: z.array(plannedTaskSchema).min(1).max(300),
   entries: z.array(z.object({ caseId: z.string().min(1), role: roleSchema, contextDigest: hash, state: z.enum(['reserved', 'validated', 'rejected', 'uncertain']), reservedUsd: finiteUsd, knownUsd: finiteUsd, uncertainUsd: finiteUsd, failure: z.enum(['provider-or-validation', 'missing-provenance', 'cost-bound-exceeded']).nullable(), inference: inferenceSchema.nullable(), output: outputSchema.nullable() }).strict()).max(300)
 }).strict();
 export type RoleRun = z.infer<typeof roleRunSchema>;
 type RoleContextTask = { attempt: BenchmarkAttempt; role: EvaluationRole; session: Session; input: { mode: 'ask' | 'plan' | 'edit'; prompt: string } | null; contextDigest: string };
-type RoleTask = RoleContextTask & { reservedUsd: number };
+type RoleTask = RoleContextTask & { reservedUsd: number; inferenceBinding: InferenceBinding };
 export type RoleExecutor = (task: RoleTask) => Promise<JobResult>;
 const providerRole = (role: EvaluationRole): AiRole => role.startsWith('assistant-') ? 'assistant' : role as 'interviewer' | 'coach';
 const planDigest = (version: string, planned: RoleRun['planned']) => digest({ version, planned: planned.map(({ reservedUsd, ...context }) => { void reservedUsd; return context; }) });
@@ -56,14 +59,15 @@ export function createRoleContexts(version: string, attempts: BenchmarkAttempt[]
 }
 
 export function createRolePlan(version: string, attempts: BenchmarkAttempt[], roles: EvaluationRole[] = [...EVALUATION_ROLES]) {
-  const context = createRoleContexts(version, attempts, roles), policy = modelPolicy(), reservations = inferenceReservations();
-  const tasks = context.tasks.map(task => ({ ...task, reservedUsd: reservations[providerRole(task.role)] }));
-  const planned = context.contexts.map(row => ({ ...row, reservedUsd: reservations[providerRole(row.role)] }));
+  const context = createRoleContexts(version, attempts, roles), policy = modelPolicy(), inferenceBindings = captureEvaluationBindings(policy, roles);
+  const bindingFor = (role: EvaluationRole) => inferenceBindings.find(binding => binding.role === providerRole(role))!;
+  const tasks = context.tasks.map(task => ({ ...task, reservedUsd: bindingFor(task.role).reserveUsd, inferenceBinding: bindingFor(task.role) }));
+  const planned = context.contexts.map(row => ({ ...row, reservedUsd: bindingFor(row.role).reserveUsd }));
   const benchmarkDigest = planDigest(version, planned);
-  return { policy, tasks, planned, benchmarkDigest, estimatedUpperUsd: planned.reduce((total, row) => total + row.reservedUsd, 0) };
+  return { policy, inferenceBindings, tasks, planned, benchmarkDigest, estimatedUpperUsd: planned.reduce((total, row) => total + row.reservedUsd, 0) };
 }
 
-const executeProductionRole: RoleExecutor = task => task.role === 'interviewer' ? interview(task.attempt.scenario, task.session) : task.role === 'coach' ? coach(task.attempt.scenario, task.session) : assist(task.attempt.scenario, task.session, task.input!);
+const executeProductionRole: RoleExecutor = task => task.role === 'interviewer' ? interview(task.attempt.scenario, task.session, undefined, task.inferenceBinding) : task.role === 'coach' ? coach(task.attempt.scenario, task.session, undefined, task.inferenceBinding) : assist(task.attempt.scenario, task.session, task.input!, undefined, task.inferenceBinding);
 
 function validatedOutput(task: RoleTask, result: JobResult) {
   if (result.kind !== providerRole(task.role)) throw new Error('Mismatched role.');
@@ -88,9 +92,10 @@ export async function recordRoleRun(version: string, attempts: BenchmarkAttempt[
     if (!caps.ai || (plan.tasks.some(task => task.role === 'coach') && !caps.coaching)) throw new Error('The selected production provider roles must be configured before recording.');
   }
   const now = options.now ?? (() => new Date());
-  const run: RoleRun = { version: 1, provenance: 'operator-model-evaluation', corpus: 'development-regression', benchmarkVersion: version, benchmarkDigest: plan.benchmarkDigest, runId: randomUUID(), policy: plan.policy, promptVersion: PROMPT_VERSION, createdAt: now().toISOString(), state: 'running', stopReason: null, planned: plan.planned, entries: [] };
+  const run: RoleRun = { version: 1, provenance: 'operator-model-evaluation', corpus: 'development-regression', benchmarkVersion: version, benchmarkDigest: plan.benchmarkDigest, runId: randomUUID(), policy: plan.policy, inferenceBindings: structuredClone(plan.inferenceBindings), promptVersion: PROMPT_VERSION, createdAt: now().toISOString(), state: 'running', stopReason: null, planned: plan.planned, entries: [] };
   await options.persist(structuredClone(run));
   for (const task of plan.tasks) {
+    const admittedBinding = plan.inferenceBindings.find(binding => binding.role === providerRole(task.role))!;
     const entry: RoleRun['entries'][number] = { caseId: task.attempt.recipe.id, role: task.role, contextDigest: task.contextDigest, state: 'reserved', reservedUsd: task.reservedUsd, knownUsd: 0, uncertainUsd: task.reservedUsd, failure: null, inference: null, output: null };
     run.entries.push(entry);
     await options.persist(structuredClone(run));
@@ -100,6 +105,8 @@ export async function recordRoleRun(version: string, attempts: BenchmarkAttempt[
       const inference = inferenceSchema.parse(result.inference);
       entry.inference = inference;
       if (inference.requestedModel !== plan.policy.model || inference.promptVersion !== PROMPT_VERSION || !inference.validated || !inference.responseId || /^(?:authored|synthetic|fixture)/.test(inference.returnedModel) || Date.parse(inference.completedAt) < Date.parse(inference.startedAt)) throw new Error('Missing recorded provider provenance.');
+      validateBoundEvaluationInference(inference, admittedBinding, result.actualUsd);
+      if (result.kind === 'run' || result.model !== inference.returnedModel || (result.kind === 'coach' && result.promptVersion !== admittedBinding.promptVersion)) throw new Error('Recorded output differs from its provider provenance.');
       entry.output = validatedOutput(task, result);
       entry.state = 'validated';
     } catch (error) {
@@ -123,6 +130,7 @@ export async function recordRoleRun(version: string, attempts: BenchmarkAttempt[
 
 export function validateRoleRun(value: unknown): RoleRun {
   const run = roleRunSchema.parse(value);
+  const bindings = validateEvaluationBindings(run.inferenceBindings, run.policy, run.promptVersion, run.planned);
   const key = (row: { caseId: string; role: string }) => `${row.caseId}:${row.role}`;
   const planned = new Map(run.planned.map(row => [key(row), row]));
   if (planned.size !== run.planned.length || new Set(run.entries.map(key)).size !== run.entries.length || run.entries.some(entry => !planned.has(key(entry)) || entry.contextDigest !== planned.get(key(entry))!.contextDigest || entry.reservedUsd !== planned.get(key(entry))!.reservedUsd)) throw new Error('Model run entries do not match their unique planned contexts.');
@@ -132,6 +140,8 @@ export function validateRoleRun(value: unknown): RoleRun {
   for (const entry of run.entries) {
     if (entry.inference && Date.parse(entry.inference.completedAt) < Date.parse(entry.inference.startedAt)) throw new Error('Provider timing is out of order.');
     if (entry.state === 'validated' && (!entry.inference?.validated || !entry.inference.responseId || /^(?:authored|synthetic|fixture)/.test(entry.inference.returnedModel) || !entry.output || entry.output.kind !== providerRole(entry.role) || entry.inference.requestedModel !== run.policy.model || entry.inference.promptVersion !== run.promptVersion || entry.knownUsd !== entry.inference.usd || entry.uncertainUsd !== 0 || entry.failure !== null)) throw new Error('A validated entry lacks matching provider provenance.');
+    if (entry.inference && !bindings && hasBoundInferenceFields(entry.inference)) throw new Error('Bound inference provenance is missing its recorded policy.');
+    if (entry.state === 'validated' && bindings) validateBoundEvaluationInference(entry.inference!, bindings.get(providerRole(entry.role))!, entry.knownUsd);
     if (entry.state !== 'validated' && entry.output !== null) throw new Error('Only validated entries can carry a candidate output.');
     if (entry.state === 'reserved' && (entry.knownUsd !== 0 || entry.uncertainUsd !== entry.reservedUsd || entry.inference !== null)) throw new Error('An outstanding reservation has inconsistent accounting.');
     if (entry.state === 'uncertain' && entry.uncertainUsd !== entry.reservedUsd) throw new Error('An uncertain call must retain its complete reservation.');

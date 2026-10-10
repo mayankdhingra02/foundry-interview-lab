@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { admissionLimits, admissionLimitsFromEnvironment, DEFAULT_ADMISSION_LIMITS } from '../lib/interview-practice/admission';
@@ -111,7 +112,7 @@ describe('retained history and immutable evidence capacity', () => {
     await context.service.cancelJob('owner-a', finish.job!.id, { requestId: randomUUID() }); session = await context.service.getSession('owner-a', session.id);
     await context.service.command('owner-a', session.id, { action: 'submit', requestId: randomUUID(), expectedRevision: session.revision });
     const claim = await context.service.claimJob('fixture-worker'); expect(await context.service.heartbeatJob(claim!)).toBe(true);
-    expect(await context.service.completeJob(claim!, { kind: 'coach', actualUsd: 0, model: 'authored-observation-only', promptVersion: 'fixture', report: observationOnlyReport(scenario) })).toBe(true);
+    expect(await completeFixtureJob(context.service, claim!, { kind: 'coach', actualUsd: 0, model: 'authored-observation-only', promptVersion: 'foundry-2026-10-09-v2', report: observationOnlyReport(scenario) })).toBe(true);
     expect((await context.service.exportSession('owner-a', session.id)).reports).toHaveLength(1);
     expect(await context.service.deleteSession('owner-a', session.id, { requestId: randomUUID() })).toEqual({ deleted: true });
     expect(await context.service.deleteAccount('owner-a', { requestId: randomUUID() })).toEqual({ deleted: true });
@@ -131,7 +132,7 @@ describe('global and per-owner queued/running job admission', () => {
     const context = setup({ admissionLimits: { globalInFlightJobs: 1 } }), a = await context.create('owner-a'), b = await context.create('owner-b'); await context.assist(a.session.id);
     const claim = await context.service.claimJob('fixture-worker'); await expect(context.assist(b.session.id, 'owner-b')).rejects.toMatchObject({ code: 'quota' });
     const independent = new SessionService(context.store, () => structuredClone(scenario), { now: () => context.clock.value, admissionLimits: { globalInFlightJobs: 1 } });
-    expect(await independent.completeJob(claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Fixture completion.', actualUsd: .01 })).toBe(true);
+    expect(await completeFixtureJob(independent, claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Fixture completion.', actualUsd: .01 })).toBe(true);
     expect((await context.assist(b.session.id, 'owner-b')).job?.state).toBe('queued');
   });
   it('enforces an owner ceiling across attempts without blocking other owners or workspace saving', async () => {

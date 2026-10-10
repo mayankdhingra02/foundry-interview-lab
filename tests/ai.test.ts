@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getScenario } from '../lib/content/scenarios';
 import { coach, interview, assist, observationOnlyReport, ProviderFailure, PROMPT_VERSION } from '../lib/ai/provider';
+import { parseInferenceBinding } from '../lib/ai/binding';
 import { inferenceReservations, modelPolicy } from '../lib/ai/policy';
 import { freezeEvidence } from '../lib/interview-practice/evidence';
 import { MemoryPracticeStore } from '../lib/server/store';
@@ -110,7 +111,7 @@ describe('provider role and evidence boundary', () => {
     const view = await service.getSession('fixture-owner', session.id);
     await service.requestAssistant('fixture-owner', session.id, { requestId: 'fixture-assistant', expectedRevision: view.revision, mode: 'ask', message: 'Explain' });
     const claim = await service.claimJob('fixture-worker'); respond({ message: 'Trace the call.', files: [] });
-    const result = await assist(scenario, session, { mode: 'ask', prompt: 'Explain' });
+    const result = await assist(scenario, session, { mode: 'ask', prompt: 'Explain' }, undefined, parseInferenceBinding(claim!.job.input.inferenceBinding)!);
     await service.completeJob(claim!, result);
     expect(JSON.stringify(await service.getSession('fixture-owner', session.id))).not.toContain('request_fixture');
     expect((await service.exportSession('fixture-owner', session.id)).jobs[0].inference?.providerRequestId).toBe('request_fixture');

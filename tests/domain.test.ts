@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { fixtureRuntimeId } from './runtime-fixtures';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -75,11 +76,11 @@ describe('deterministic session ownership and mutation contracts', () => {
     await expect(service.saveWorkspace('owner-a', session.id, { ...mutation(session.revision), files: { 'main.py': 'changed' } })).rejects.toMatchObject({ code: 'conflict' });
     await expect(service.command('owner-a', session.id, { ...mutation(session.revision), action: 'submit' })).rejects.toMatchObject({ code: 'conflict' });
     const question = await service.claimJob('worker'); expect(question).not.toBeNull();
-    await service.completeJob(question!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'ask_probe', question: 'What did you verify?', competencyId: 'correctness', probeId: 'p1', evidenceIds: [] } });
+    await completeFixtureJob(service, question!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'ask_probe', question: 'What did you verify?', competencyId: 'correctness', probeId: 'p1', evidenceIds: [] } });
     session = await service.getSession('owner-a', session.id);
     session = (await service.commitTurn('owner-a', session.id, { ...mutation(session.revision), text: 'I checked a positive pair and a negative pair.' })).session;
     const followup = await service.claimJob('worker');
-    await service.completeJob(followup!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'end_debrief', evidenceIds: [] } });
+    await completeFixtureJob(service, followup!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'end_debrief', evidenceIds: [] } });
     session = await service.getSession('owner-a', session.id);
     session = (await service.command('owner-a', session.id, { ...mutation(session.revision), action: 'submit' })).session;
     expect(session.lifecycle).toBe('reviewing'); expect(session.frozenEvidence!.items.some(e => e.content.includes('negative pair'))).toBe(true);
@@ -90,7 +91,7 @@ describe('deterministic session ownership and mutation contracts', () => {
     session = (await service.requestRun('owner-a', session.id, mutation(session.revision))).session;
     const claim = await service.claimJob('worker');
     session = (await service.saveWorkspace('owner-a', session.id, { ...mutation(session.revision), files: { 'main.py': 'new work' } })).session;
-    await service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }] } });
+    await completeFixtureJob(service, claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }] } });
     session = await service.getSession('owner-a', session.id);
     expect(session.runs[0].snapshotSha256).not.toBe(digest(session.files));
     expect(session.runs[0].testSuiteDigest).toBe(digest(scenario.tests));
@@ -98,14 +99,14 @@ describe('deterministic session ownership and mutation contracts', () => {
   it('rejects unknown runner tests instead of inventing evidence', async () => {
     const service = serviceFor(), session = await create(service);
     await service.requestRun('owner-a', session.id, mutation(session.revision)); const claim = await service.claimJob('worker');
-    await expect(service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 1, tests: [{ id: 'invented', title: 'Invented', status: 'passed' }] } })).rejects.toMatchObject({ code: 'invalid' });
+    await expect(completeFixtureJob(service, claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 1, tests: [{ id: 'invented', title: 'Invented', status: 'passed' }] } })).rejects.toMatchObject({ code: 'invalid' });
     expect((await service.getSession('owner-a', session.id)).runs).toHaveLength(0);
   });
   it('binds newly frozen test facts to the actual runtime without rewriting an existing manifest', async () => {
     const service = serviceFor(), session = await create(service);
     await service.requestRun('owner-a', session.id, mutation(session.revision));
     const claim = await service.claimJob('worker');
-    await service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }] } });
+    await completeFixtureJob(service, claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'completed', command: 'synthetic test fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }] } });
     const stored = await service.exportSession('owner-a', session.id);
     const manifest = freezeEvidence(stored, '2026-10-09T12:00:00.000Z');
     const fact = manifest.items.find(item => item.kind === 'test')!;
@@ -130,7 +131,7 @@ describe('deterministic session ownership and mutation contracts', () => {
     const service = serviceFor(), session = await create(service);
     await service.requestRun('owner-a', session.id, mutation(session.revision));
     const claim = await service.claimJob('worker');
-    await service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'timeout', command: 'fixture', stdout: '', stderr: 'Deadline expired', exitCode: null, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }, { id: 'private', title: 'Edge case', status: 'skipped', detail: 'No completed observation: time limit exceeded.' }] } });
+    await completeFixtureJob(service, claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'timeout', command: 'fixture', stdout: '', stderr: 'Deadline expired', exitCode: null, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }, { id: 'private', title: 'Edge case', status: 'skipped', detail: 'No completed observation: time limit exceeded.' }] } });
     const run = (await service.getSession('owner-a', session.id)).runs[0];
     expect(run.status).toBe('timeout'); expect(run.tests.map(t => t.status)).toEqual(['passed', 'skipped']);
   });
@@ -138,7 +139,7 @@ describe('deterministic session ownership and mutation contracts', () => {
     const service = serviceFor(); let session = await create(service);
     session = (await service.requestAssistant('owner-a', session.id, { ...mutation(session.revision), mode: 'edit', message: 'Fix addition' })).session;
     const claim = await service.claimJob('worker');
-    await service.completeJob(claim!, { kind: 'assistant', model: 'synthetic-fixture', actualUsd: 0, message: 'Proposed edit', files: { 'main.py': 'def add(a,b): return a+b' } });
+    await completeFixtureJob(service, claim!, { kind: 'assistant', model: 'synthetic-fixture', actualUsd: 0, message: 'Proposed edit', files: { 'main.py': 'def add(a,b): return a+b' } });
     session = await service.getSession('owner-a', session.id);
     const proposal = session.editProposals[0];
     session = (await service.saveWorkspace('owner-a', session.id, { ...mutation(session.revision), files: { 'main.py': 'my later work' } })).session;
@@ -155,8 +156,8 @@ describe('leases, cost admission, reports and deletion', () => {
     const old = await service.claimJob('old-worker'); clock = new Date(clock.getTime() + 1100);
     expect(await service.heartbeatJob(old!)).toBe(false);
     const current = await service.claimJob('new-worker'); expect(current!.fencingToken).toBeGreaterThan(old!.fencingToken);
-    expect(await service.completeJob(old!, { kind: 'assistant', model: 'fixture', message: 'stale', actualUsd: 0 })).toBe(false);
-    expect(await service.completeJob(current!, { kind: 'assistant', model: 'fixture', message: 'current', actualUsd: 0.01 })).toBe(true);
+    expect(await completeFixtureJob(service, old!, { kind: 'assistant', model: 'fixture', message: 'stale', actualUsd: 0 })).toBe(false);
+    expect(await completeFixtureJob(service, current!, { kind: 'assistant', model: 'fixture', message: 'current', actualUsd: 0.01 })).toBe(true);
     const saved = await service.getSession('owner-a', session.id); expect(saved.assistantMessages.at(-1)!.text).toBe('current');
     expect(saved.usage.uncertainUsd).toBeCloseTo(0.08); expect(saved.usage.spentUsd).toBeCloseTo(0.01);
   });
@@ -166,7 +167,7 @@ describe('leases, cost admission, reports and deletion', () => {
     const claim = await service.claimJob('worker'), key = request();
     const cancelled = await service.cancelJob('owner-a', pending.job!.id, { requestId: key });
     expect(await service.cancelJob('owner-a', pending.job!.id, { requestId: key })).toEqual(cancelled);
-    expect(await service.completeJob(claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'timeout', command: 'fixture', stdout: '', stderr: '', exitCode: null, durationMs: 1, tests: [] } })).toBe(false);
+    expect(await completeFixtureJob(service, claim!, { kind: 'run', run: { runtimeDigest: fixtureRuntimeId, status: 'timeout', command: 'fixture', stdout: '', stderr: '', exitCode: null, durationMs: 1, tests: [] } })).toBe(false);
   });
   it('checks budget atomically and does not reset daily admission by deleting history', async () => {
     const service = serviceFor({ maxSessionUsd: 0.01, maxDailySessions: 1 }); const session = await create(service);
@@ -195,7 +196,7 @@ describe('leases, cost admission, reports and deletion', () => {
   it('keeps the same frozen generation on report retry and survives tab closure', async () => {
     const store = new MemoryPracticeStore(), service = new SessionService(store, () => scenario); let session = await create(service);
     session = (await service.command('owner-a', session.id, { ...mutation(session.revision), action: 'finish' })).session;
-    const initial = await service.claimJob('worker'); await service.completeJob(initial!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'ask_probe', question: 'What did you verify?', competencyId: 'correctness', probeId: 'p1', evidenceIds: [] } });
+    const initial = await service.claimJob('worker'); await completeFixtureJob(service, initial!, { kind: 'interviewer', model: 'authored', actualUsd: 0, proposal: { action: 'ask_probe', question: 'What did you verify?', competencyId: 'correctness', probeId: 'p1', evidenceIds: [] } });
     session = await service.getSession('owner-a', session.id);
     await service.command('owner-a', session.id, { ...mutation(session.revision), action: 'submit' });
     const coach = await service.claimJob('worker'); await service.failJob(coach!, 'Provider unavailable', 0);

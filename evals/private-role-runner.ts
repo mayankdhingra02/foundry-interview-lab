@@ -2,12 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { assist, coach, interview, PROMPT_VERSION, ProviderFailure } from '../lib/ai/provider';
 import { INPUT_BYTES, modelPolicy, type AiRole } from '../lib/ai/policy';
+import type { InferenceBinding } from '../lib/ai/binding';
 import { digest, validateFiles } from '../lib/interview-practice/domain';
 import { validateInterviewProposal, validateReport } from '../lib/interview-practice/evidence';
 import type { JobResult, Session } from '../lib/interview-practice/types';
 import { capabilities } from '../lib/server/config';
 import { developmentCorpusIndex, materializePrivateCorpus, privateCorpusSchema, validatePrivateCorpus, type PrivateCorpus, type PrivateCorpusAttempt } from './private-corpus';
 import { EVALUATION_ROLES, roleRunSchema, type EvaluationRole } from './role-runner';
+import { captureEvaluationBindings, hasBoundInferenceFields, validateBoundEvaluationInference, validateEvaluationBindings } from './inference-binding';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/), identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/);
 export const privateRoleRunSchema = roleRunSchema.omit({ provenance: true, corpus: true, benchmarkVersion: true, benchmarkDigest: true, planned: true, stopReason: true }).extend({
@@ -19,7 +21,7 @@ export const privateRoleRunSchema = roleRunSchema.omit({ provenance: true, corpu
 export const holdoutUnlockSchema = z.object({ version: z.literal(1), purpose: z.literal('one-run-heldout-model-evaluation'), corpus: privateCorpusSchema.shape.corpus, corpusDigest: hash, runId: z.string().uuid(), custodianId: identifier, authorizedOperatorId: identifier, acknowledgedAt: z.string().datetime() }).strict();
 export type PrivateRoleRun = z.infer<typeof privateRoleRunSchema>;
 export type PrivateRoleContext = { corpus: unknown; captures?: unknown; holdoutUnlock?: unknown };
-export type PrivateRoleTask = { attempt: PrivateCorpusAttempt; role: EvaluationRole; session: Session; input: { mode: 'ask' | 'plan' | 'edit'; prompt: string } | null; contextDigest: string; reservedUsd: number };
+export type PrivateRoleTask = { attempt: PrivateCorpusAttempt; role: EvaluationRole; session: Session; input: { mode: 'ask' | 'plan' | 'edit'; prompt: string } | null; contextDigest: string; reservedUsd: number; inferenceBinding: InferenceBinding };
 export type PrivateRoleExecutor = (task: PrivateRoleTask) => Promise<JobResult>;
 export const privateTaskKey = (row: { caseId: string; role: string }) => JSON.stringify([row.caseId, row.role]);
 const providerRole = (role: EvaluationRole): AiRole => role.startsWith('assistant-') ? 'assistant' : role as 'interviewer' | 'coach';
@@ -55,11 +57,12 @@ export function createPrivateRoleContexts(context: PrivateRoleContext, roles: Ev
   return { corpus, corpusDigest, tasks, contexts };
 }
 export function createPrivateRolePlan(context: PrivateRoleContext, roles?: EvaluationRole[]) {
-  const contexts = createPrivateRoleContexts(context, roles), policy = modelPolicy();
-  const tasks = contexts.tasks.map(task => ({ ...task, reservedUsd: reserve(policy, task.role) })), planned = contexts.contexts.map(row => ({ ...row, reservedUsd: reserve(policy, row.role) }));
-  return { ...contexts, policy, tasks, planned, planDigest: privatePlanDigest(contexts.corpus.corpus, contexts.corpusDigest, PROMPT_VERSION, planned), estimatedUpperUsd: planned.reduce((sum, row) => sum + row.reservedUsd, 0) };
+  const contexts = createPrivateRoleContexts(context, roles), policy = modelPolicy(), inferenceBindings = captureEvaluationBindings(policy, contexts.tasks.map(task => task.role));
+  const bindingFor = (role: EvaluationRole) => inferenceBindings.find(binding => binding.role === providerRole(role))!;
+  const tasks = contexts.tasks.map(task => ({ ...task, reservedUsd: bindingFor(task.role).reserveUsd, inferenceBinding: bindingFor(task.role) })), planned = contexts.contexts.map(row => ({ ...row, reservedUsd: bindingFor(row.role).reserveUsd }));
+  return { ...contexts, policy, inferenceBindings, tasks, planned, planDigest: privatePlanDigest(contexts.corpus.corpus, contexts.corpusDigest, PROMPT_VERSION, planned), estimatedUpperUsd: planned.reduce((sum, row) => sum + row.reservedUsd, 0) };
 }
-function validateOutput(task: Omit<PrivateRoleTask, 'reservedUsd'>, output: PrivateRoleRun['entries'][number]['output']) {
+function validateOutput(task: Omit<PrivateRoleTask, 'reservedUsd' | 'inferenceBinding'>, output: PrivateRoleRun['entries'][number]['output']) {
   if (!output || output.kind !== providerRole(task.role)) throw new Error('The private candidate role does not match.');
   if (output.kind === 'coach') validateReport(output.report, task.attempt.scenario, task.session.frozenEvidence!);
   else if (output.kind === 'interviewer') validateInterviewProposal(output.proposal, task.attempt.scenario, task.session);
@@ -74,6 +77,7 @@ function validateOutput(task: Omit<PrivateRoleTask, 'reservedUsd'>, output: Priv
 /** Revalidate exact private contexts and recorded accounting without model calls. */
 export function validatePrivateRoleRun(value: unknown, context: PrivateRoleContext) {
   const run = privateRoleRunSchema.parse(value), roles = [...new Set(run.planned.map(row => row.role))];
+  const bindings = validateEvaluationBindings(run.inferenceBindings, run.policy, run.promptVersion, run.planned);
   const authored = createPrivateRoleContexts(context, roles, run.promptVersion);
   if (digest(run.corpus) !== digest(authored.corpus.corpus) || run.corpusDigest !== authored.corpusDigest || privatePlanDigest(run.corpus, run.corpusDigest, run.promptVersion, run.planned) !== run.planDigest) throw new Error('Private corpus/plan identity changed.');
   if ((run.corpus.split === 'holdout') !== Boolean(run.holdoutUnlockDigest)) throw new Error('Holdout recording requires a bound custodian unlock.');
@@ -82,7 +86,7 @@ export function validatePrivateRoleRun(value: unknown, context: PrivateRoleConte
   if (run.planned.length !== expected.size || new Set(run.planned.map(privateTaskKey)).size !== run.planned.length) throw new Error('Private planned coverage changed.');
   for (const row of run.planned) {
     const { reservedUsd, ...actual } = row;
-    if (digest(actual) !== digest(expected.get(privateTaskKey(row))) || reservedUsd !== reserve(run.policy, row.role)) throw new Error('Private context/reservation binding changed.');
+    if (digest(actual) !== digest(expected.get(privateTaskKey(row))) || reservedUsd !== (bindings?.get(providerRole(row.role))?.reserveUsd ?? reserve(run.policy, row.role))) throw new Error('Private context/reservation binding changed.');
   }
   if (run.entries.length > run.planned.length || run.entries.some((entry, index) => privateTaskKey(entry) !== privateTaskKey(run.planned[index]) || entry.contextDigest !== run.planned[index].contextDigest || entry.reservedUsd !== run.planned[index].reservedUsd)) throw new Error('Private journal entries are not an exact planned prefix.');
   if ((run.state !== 'stopped' && run.stopReason !== null) || (run.state === 'stopped' && run.stopReason === null) || (run.state === 'completed' && (run.entries.length !== run.planned.length || run.entries.some(entry => ['reserved', 'uncertain'].includes(entry.state))))) throw new Error('Private journal completion state changed.');
@@ -90,8 +94,10 @@ export function validatePrivateRoleRun(value: unknown, context: PrivateRoleConte
     const inference = entry.inference;
     if (inference && (Date.parse(inference.startedAt) < Date.parse(run.createdAt) || Date.parse(inference.completedAt) < Date.parse(inference.startedAt))) throw new Error('Private provider chronology changed.');
     if (inference && (entry.knownUsd !== inference.usd || entry.uncertainUsd !== 0)) throw new Error('Private known provider accounting changed.');
+    if (inference && !bindings && hasBoundInferenceFields(inference)) throw new Error('Bound private inference provenance is missing its recorded policy.');
     if (entry.state === 'validated') {
       if (!inference?.validated || !inference.responseId || /^(?:authored|synthetic|fixture)/.test(inference.returnedModel) || inference.requestedModel !== run.policy.model || inference.promptVersion !== run.promptVersion || entry.knownUsd !== inference.usd || entry.uncertainUsd !== 0 || entry.failure !== null) throw new Error('Private validated candidate lacks matching provider provenance.');
+      if (bindings) validateBoundEvaluationInference(inference, bindings.get(providerRole(entry.role))!, entry.knownUsd);
       validateOutput(tasks.get(privateTaskKey(entry))!, entry.output);
     } else if (entry.output !== null) throw new Error('Unvalidated private candidates cannot carry output.');
     if (entry.state === 'reserved' && (index !== run.entries.length - 1 || run.state === 'completed' || entry.knownUsd !== 0 || entry.uncertainUsd !== entry.reservedUsd || inference !== null || entry.failure !== null)) throw new Error('Outstanding private reservation changed.');
@@ -115,16 +121,19 @@ export async function recordPrivateRoleRun(context: PrivateRoleContext, options:
   } else if (options.holdoutUnlock !== undefined) throw new Error('Holdout unlock cannot relabel another split.');
   if (plan.estimatedUpperUsd > options.maxUsd + Number.EPSILON) throw new Error('Private planned reservations exceed the spending cap.');
   if (!options.executor) { const caps = capabilities(); if (!caps.ai || (plan.tasks.some(task => task.role === 'coach') && !caps.coaching)) throw new Error('Selected private provider roles are unavailable.'); }
-  const run: PrivateRoleRun = { version: 1, artifact: 'private-corpus-model-run', provenance: 'operator-private-model-evaluation', corpus: plan.corpus.corpus, corpusDigest: plan.corpusDigest, planDigest: plan.planDigest, operatorId: options.operatorId, holdoutUnlockDigest, runId, policy: plan.policy, promptVersion: PROMPT_VERSION, createdAt, state: 'running', stopReason: null, planned: plan.planned, entries: [] };
+  const run: PrivateRoleRun = { version: 1, artifact: 'private-corpus-model-run', provenance: 'operator-private-model-evaluation', corpus: plan.corpus.corpus, corpusDigest: plan.corpusDigest, planDigest: plan.planDigest, operatorId: options.operatorId, holdoutUnlockDigest, runId, policy: plan.policy, inferenceBindings: structuredClone(plan.inferenceBindings), promptVersion: PROMPT_VERSION, createdAt, state: 'running', stopReason: null, planned: plan.planned, entries: [] };
   await options.persist(structuredClone(run));
   for (const task of plan.tasks) {
     if (options.signal?.aborted) { run.state = 'stopped'; run.stopReason = 'operator-cancelled'; break; }
+    const admittedBinding = plan.inferenceBindings.find(binding => binding.role === providerRole(task.role))!;
     const entry: PrivateRoleRun['entries'][number] = { caseId: task.attempt.case.id, role: task.role, contextDigest: task.contextDigest, state: 'reserved', reservedUsd: task.reservedUsd, knownUsd: 0, uncertainUsd: task.reservedUsd, failure: null, inference: null, output: null };
     run.entries.push(entry); await options.persist(structuredClone(run)); let result: JobResult | undefined;
     try {
-      result = await (options.executor ? options.executor(task) : task.role === 'coach' ? coach(task.attempt.scenario, task.session) : task.role === 'interviewer' ? interview(task.attempt.scenario, task.session) : assist(task.attempt.scenario, task.session, task.input!));
+      result = await (options.executor ? options.executor(task) : task.role === 'coach' ? coach(task.attempt.scenario, task.session, options.signal, task.inferenceBinding) : task.role === 'interviewer' ? interview(task.attempt.scenario, task.session, options.signal, task.inferenceBinding) : assist(task.attempt.scenario, task.session, task.input!, options.signal, task.inferenceBinding));
       const inference = roleRunSchema.shape.entries.element.shape.inference.unwrap().parse(result.inference); entry.inference = inference;
       if (!inference.validated || !inference.responseId || inference.requestedModel !== run.policy.model || inference.promptVersion !== run.promptVersion || /^(?:authored|synthetic|fixture)/.test(inference.returnedModel) || Date.parse(inference.startedAt) < Date.parse(createdAt) || Date.parse(inference.completedAt) < Date.parse(inference.startedAt)) throw new Error('Private provider provenance is missing.');
+      validateBoundEvaluationInference(inference, admittedBinding, result.actualUsd);
+      if (result.kind === 'run' || result.model !== inference.returnedModel || (result.kind === 'coach' && result.promptVersion !== admittedBinding.promptVersion)) throw new Error('Private output differs from its provider provenance.');
       const output = result.kind === 'coach' ? { kind: result.kind, report: result.report } : result.kind === 'interviewer' ? { kind: result.kind, proposal: result.proposal } : result.kind === 'assistant' ? { kind: result.kind, message: result.message, files: result.files ?? {} } : null;
       entry.output = validateOutput(task, roleRunSchema.shape.entries.element.shape.output.unwrap().parse(output)); entry.state = 'validated';
     } catch (error) {

@@ -41,10 +41,11 @@ export type CoachingReport = CoachOutput & { id: string; generationId: string; c
 export type InterviewProposal = { action: 'ask_probe' | 'end_debrief'; question?: string; competencyId?: string; evidenceIds: string[]; probeId?: string };
 export type JobKind = 'run' | 'interviewer' | 'assistant' | 'coach';
 export type JobState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-export type InferenceRecord = { requestedModel: string; returnedModel: string; promptVersion: string; inputTokens: number; outputTokens: number; providerRequestId?: string; responseId?: string; startedAt: string; completedAt: string; usd: number; validated: boolean };
-export type PracticeJob = { id: string; sessionId: string; ownerId: string; kind: JobKind; state: JobState; requestId: string; fingerprint: string; snapshotId: string; input: Record<string, unknown>; createdAt: string; updatedAt: string; attempt: number; reservationSequence: number; fencingToken: number; claimToken: string | null; workerId: string | null; leaseExpiresAt: string | null; cancellationRequested: boolean; safeError?: string; reservedUsd: number; actualUsd?: number; inference?: InferenceRecord };
+export type InferenceRecord = { requestedModel: string; returnedModel: string; promptVersion: string; inputTokens: number; outputTokens: number; providerRequestId?: string; responseId?: string; startedAt: string; completedAt: string; usd: number; validated: boolean; provider?: 'openai-responses'; role?: 'interviewer' | 'assistant' | 'coach'; schemaVersion?: string; contextVersion?: string; bindingDigest?: string };
+export type JobAttemptObservation = { attempt: number; reservationSequence: number | null; observedAt: string; outcome: 'settled' | 'uncertain' | 'legacy-unattributed'; actualUsd?: number; inference?: InferenceRecord };
+export type PracticeJob = { id: string; sessionId: string; ownerId: string; kind: JobKind; state: JobState; requestId: string; fingerprint: string; snapshotId: string; input: Record<string, unknown>; createdAt: string; updatedAt: string; attempt: number; reservationSequence: number; fencingToken: number; claimToken: string | null; workerId: string | null; leaseExpiresAt: string | null; cancellationRequested: boolean; safeError?: string; reservedUsd: number; actualUsd?: number; inference?: InferenceRecord; attemptObservations?: JobAttemptObservation[] };
 export type JobClaim = { job: PracticeJob; workerId: string; claimToken: string; fencingToken: number };
-export type JobView = Omit<PracticeJob, 'ownerId' | 'claimToken' | 'workerId' | 'input' | 'fingerprint' | 'inference'>;
+export type JobView = Omit<PracticeJob, 'ownerId' | 'claimToken' | 'workerId' | 'input' | 'fingerprint' | 'inference' | 'attemptObservations'>;
 export type JobResult = (
   | { kind: 'run'; run: RunExecution; actualUsd?: number }
   | { kind: 'interviewer'; proposal: InterviewProposal; model: string; actualUsd?: number }

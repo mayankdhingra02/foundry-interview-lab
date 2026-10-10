@@ -6,11 +6,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { digest } from '../interview-practice/domain';
-import type { CoachOutput, JobClaim, JobKind, RunExecution, Scenario, Session } from '../interview-practice/types';
+import type { JobClaim, JobKind, RunExecution, Scenario, Session } from '../interview-practice/types';
 import { configuredRuntimeBinding, parseRuntimeBinding } from '../runtime/binding';
 import { executeScenario, runnerHealth, type ExecuteOptions } from '../runtime/runner';
 import { SessionService } from './session-service';
 import { FilePracticeStore } from './store';
+import { authoredQuestion, observationOnlyReport } from '../ai/authored';
+import { PROMPT_VERSION } from '../ai/binding';
 
 /** Original operations fixture. Never register this package in the learner catalog or benchmark. */
 function fixture(): Scenario {
@@ -32,14 +34,6 @@ function fixture(): Scenario {
     drills: [{ id: 'synthetic-only', title: 'Synthetic fixture', competencyId: 'synthetic-observation', lesson: 'No learner recommendation.', exercise: 'Operations component check only.' }],
     rights: 'Original Engineering Foundry synthetic operations fixture; excluded from learner and expert benchmark counts.',
     runtime: { image: 'python:3.11-slim', timeoutSeconds: 10, memoryMb: 128 },
-  };
-}
-
-function syntheticReport(): CoachOutput {
-  return {
-    overview: 'SYNTHETIC OPERATIONS CANARY — observation-only report. No learner, AI or expert assessment was performed. This checks the frozen-evidence report path only.',
-    rubric: [{ criterionId: 'synthetic-observation', level: 'Not observed', confidence: 'low', evidenceIds: [], feedback: 'Synthetic fixture only; no learner skill is assessed.' }],
-    nextPractice: [{ drillId: 'synthetic-only', reason: 'Synthetic operations fixture only; no measured learner weakness or practice recommendation.' }],
   };
 }
 
@@ -168,19 +162,19 @@ export async function runDisposableCanary(
 
     session = await service.getSession(ownerId, sessionId);
     await service.command(ownerId, sessionId, { requestId: randomUUID(), expectedRevision: session.revision, action: 'finish' });
-    const question = await claim('interviewer'), probe = scenario.probes[0];
-    requireCheck(await service.completeJob(question.claim, { kind: 'interviewer', proposal: { action: 'ask_probe', question: probe.question, competencyId: probe.competencyId, probeId: probe.id, evidenceIds: [] }, model: 'authored', actualUsd: 0 }), 'worker_fenced');
+    const question = await claim('interviewer');
+    requireCheck(await service.completeJob(question.claim, { kind: 'interviewer', proposal: authoredQuestion(scenario, question.stored), model: 'authored', actualUsd: 0 }), 'worker_fenced');
     session = await service.getSession(ownerId, sessionId);
     await service.command(ownerId, sessionId, { requestId: randomUUID(), expectedRevision: session.revision, action: 'submit' });
     const report = await claim('coach');
     requireCheck(report.stored.frozenEvidence && report.claim.job.input.evidenceDigest === report.stored.frozenEvidence.digest && report.claim.job.input.watermark === report.stored.frozenEvidence.watermark, 'frozen_evidence_invalid');
-    requireCheck(await service.completeJob(report.claim, { kind: 'coach', report: syntheticReport(), model: 'synthetic-canary-observation-only', promptVersion: 'synthetic-canary-v1', actualUsd: 0 }), 'worker_fenced');
+    requireCheck(await service.completeJob(report.claim, { kind: 'coach', report: observationOnlyReport(scenario), model: 'authored-observation-only', promptVersion: PROMPT_VERSION, actualUsd: 0 }), 'worker_fenced');
     result.counts.reports = 1;
     service = createService();
     const completed = await service.exportSession(ownerId, sessionId), published = completed.reports[0];
     const testFact = completed.frozenEvidence?.items.find(item => item.kind === 'test');
     result.checks.frozenEvidence = Boolean(completed.frozenEvidence && completed.frozenEvidence.digest === digest(completed.frozenEvidence.items) && completed.codeFrozenSnapshotId === admitted.id && testFact && JSON.parse(testFact.content).runtimeDigest === binding.imageId && JSON.parse(testFact.content).snapshotSha256 === admitted.sha256);
-    result.checks.syntheticReport = Boolean(published && published.model === 'synthetic-canary-observation-only' && published.overview.startsWith('SYNTHETIC OPERATIONS CANARY') && published.rubric.every(row => row.level === 'Not observed') && completed.usage.aiCalls === 0 && completed.usage.spentUsd === 0 && completed.jobs.every(job => job.actualUsd === 0 && job.state === 'completed' && !job.inference));
+    result.checks.syntheticReport = Boolean(published && published.model === 'authored-observation-only' && published.promptVersion === PROMPT_VERSION && completed.scenarioId === 'operations-canary' && completed.scenarioDigest === digest(scenario) && digest({ overview: published.overview, rubric: published.rubric, nextPractice: published.nextPractice }) === digest(observationOnlyReport(scenario)) && published.rubric.every(row => row.level === 'Not observed') && completed.usage.aiCalls === 0 && completed.usage.spentUsd === 0 && completed.jobs.every(job => job.actualUsd === 0 && job.state === 'completed' && !job.inference));
     result.checks.durableReport = Boolean(completed.lifecycle === 'completed' && completed.reports.length === 1 && published.evidenceDigest === completed.frozenEvidence?.digest && digest(published.evidence) === digest(completed.frozenEvidence?.items) && !completed.turns.some(turn => turn.role === 'learner'));
     requireCheck(result.checks.frozenEvidence && result.checks.syntheticReport && result.checks.durableReport, 'report_validation_failed');
     ensureActive();

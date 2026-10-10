@@ -78,7 +78,7 @@ describe('disposable durable canary contracts; execution is injected, never Dock
     expect(fetch).not.toHaveBeenCalled();
     const coach = completion.mock.calls[2][1];
     expect(coach.kind).toBe('coach');
-    if (coach.kind === 'coach') { expect(coach.report.overview).toContain('SYNTHETIC'); expect(coach.report.rubric.every(row => row.level === 'Not observed')).toBe(true); }
+    if (coach.kind === 'coach') { expect(coach.model).toBe('authored-observation-only'); expect(coach.inference).toBeUndefined(); expect(coach.report.overview).toContain('does not assess your skill'); expect(coach.report.rubric.every(row => row.level === 'Not observed')).toBe(true); }
     expect(result.limitations.join(' ')).toContain('no real container');
     expect(JSON.stringify(result)).not.toContain('solution.py'); expect(JSON.stringify(result)).not.toContain('return a + b');
   });

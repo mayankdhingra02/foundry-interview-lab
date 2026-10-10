@@ -8,13 +8,14 @@ import { createRoleContexts, createRolePlan, EVALUATION_ROLES, recordRoleRun, ty
 import { roleAnnotationTemplate, roleAnnotationsSchema, roleCandidateDigest, scoreRoleReview, type RoleAssessment, type RoleReviewContext } from '../evals/role-review';
 import { authoredQuestion, PROMPT_VERSION } from '../lib/ai/provider';
 import { digest } from '../lib/interview-practice/domain';
+import { inferenceBindingDigest } from '../lib/ai/binding';
 
 // Every candidate, identity and label in this file is hypothetical unit data.
 // No output is represented as an actual provider response or independent review.
 let context: RoleReviewContext, attempt: BenchmarkAttempt, run: RoleRun;
 const directories: string[] = [];
 const executor: RoleExecutor = async task => {
-  const common = { model: 'unit-placeholder-model', actualUsd: 0.00165, inference: { requestedModel: 'gpt-5.4-mini', returnedModel: 'unit-placeholder-model', promptVersion: PROMPT_VERSION, responseId: 'unit-only-not-a-provider-response', inputTokens: 1000, outputTokens: 200, startedAt: '2026-10-09T13:00:01.000Z', completedAt: '2026-10-09T13:00:02.000Z', usd: 0.00165, validated: true } };
+  const common = { model: 'unit-placeholder-model', actualUsd: 0.00165, inference: { requestedModel: 'gpt-5.4-mini', returnedModel: 'unit-placeholder-model', promptVersion: PROMPT_VERSION, responseId: 'unit-only-not-a-provider-response', inputTokens: 1000, outputTokens: 200, startedAt: '2026-10-09T13:00:01.000Z', completedAt: '2026-10-09T13:00:02.000Z', usd: 0.00165, validated: true, provider: task.inferenceBinding.provider, role: task.inferenceBinding.role, schemaVersion: task.inferenceBinding.schemaVersion, contextVersion: task.inferenceBinding.contextVersion, bindingDigest: inferenceBindingDigest(task.inferenceBinding) } };
   if (task.role === 'interviewer') return { kind: 'interviewer', proposal: authoredQuestion(task.attempt.scenario, task.session), ...common };
   if (task.role === 'coach') {
     const report = conservativeReport(task.attempt), criterion = report.rubric.find(row => !/comprehension|understand|communication|ai[-_]?collaboration/.test(row.criterionId))!;
@@ -103,7 +104,8 @@ describe('bound role-specific expert-review import', () => {
     const labels = hypotheticalAnnotations(), changed = structuredClone(run); if (changed.entries[0].output!.kind === 'interviewer') changed.entries[0].output!.proposal.question += ' Changed';
     expect(() => scoreRoleReview(changed, labels, context)).toThrow();
     const differentRun = structuredClone(run); differentRun.runId = '00000000-0000-4000-8000-000000000000'; expect(() => scoreRoleReview(differentRun, labels, context)).toThrow('run/version');
-    const changedJournal = structuredClone(run); changedJournal.policy.inputRate += 0.1; expect(() => scoreRoleReview(changedJournal, labels, context)).toThrow('run artifact digest changed');
+    const changedJournal = structuredClone(run); changedJournal.policy.inputRate += 0.1; expect(() => scoreRoleReview(changedJournal, labels, context)).toThrow('admitted policy');
+    const changedMetadata = structuredClone(run); changedMetadata.createdAt = '2026-10-09T12:59:59.000Z'; expect(() => scoreRoleReview(changedMetadata, labels, context)).toThrow('run artifact digest changed');
     expect(() => scoreRoleReview(run, labels, { ...context, benchmarkVersion: 'different-corpus' })).toThrow('benchmark version');
     const missingAttempt = { ...context, attempts: context.attempts.filter(row => row.recipe.id !== attempt.recipe.id) }; expect(() => scoreRoleReview(run, labels, missingAttempt)).toThrow('unknown authored attempt');
   });

@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -25,7 +26,7 @@ describe('persisted event replay boundaries', () => {
     const context = harness(), session = (await context.practice.createSession(owner, { scenarioId: scenario.id, requestId: requestId() })).session;
     await context.practice.requestAssistant(owner, session.id, { requestId: requestId(), expectedRevision: session.revision, mode: 'edit', message: 'Propose a change.' });
     const claim = await context.practice.claimJob('fixture-worker');
-    await context.practice.completeJob(claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Inspect this change.', files: { 'main.py': 'PRIVATE-PROPOSED-SOURCE' }, actualUsd: 0 });
+    await completeFixtureJob(context.practice, claim!, { kind: 'assistant', model: 'synthetic-fixture', message: 'Inspect this change.', files: { 'main.py': 'PRIVATE-PROPOSED-SOURCE' }, actualUsd: 0 });
     const view = await context.practice.getSession(owner, session.id), event = view.events.find(event => event.type === 'assistant.edit-proposed');
     expect(event?.payload).toEqual({ jobId: claim!.job.id, proposalId: view.editProposals[0].id, baseSnapshotId: view.editProposals[0].baseSnapshotId, baseSha256: view.editProposals[0].baseSha256, paths: ['main.py'] });
     expect(JSON.stringify(event)).not.toContain('PRIVATE-PROPOSED-SOURCE');

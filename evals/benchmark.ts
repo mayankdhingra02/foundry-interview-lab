@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { inferenceBindingDigest, parseInferenceBinding } from '../lib/ai/binding';
 import { getScenario, listScenarios } from '../lib/content/scenarios';
 import { digest, toPublicScenario, validateFiles } from '../lib/interview-practice/domain';
 import { buildEvidence, coachOutputSchema, freezeEvidence, interviewProposalSchema, validateInterviewProposal, validateReport } from '../lib/interview-practice/evidence';
@@ -146,7 +147,15 @@ export async function runDeterministicBenchmark(attempts: BenchmarkAttempt[]): P
     session = (await service.requestAssistant(owner, session.id, { requestId: 'eval-assist-0001', expectedRevision: session.revision, mode: 'edit', message: 'Propose a fix' })).session;
     const claim = await service.claimJob('regression-worker');
     assert(claim, 'Assistant fixture was not admitted.');
-    await service.completeJob(claim!, { kind: 'assistant', message: 'Developer-authored patch fixture.', files: scenario.referenceFiles, model: 'synthetic-fixture', actualUsd: 0 });
+    const binding = parseInferenceBinding(claim!.job.input.inferenceBinding, 'assistant');
+    if (!binding) throw new Error('The synthetic assistant fixture needs its admitted binding.');
+    // Hypothetical zero-token provenance for this domain regression; no provider ran.
+    assert(await service.completeJob(claim!, {
+      kind: 'assistant', message: 'Developer-authored patch fixture.', files: scenario.referenceFiles, model: 'synthetic-fixture', actualUsd: 0,
+      inference: { provider: binding.provider, role: binding.role, bindingDigest: inferenceBindingDigest(binding), requestedModel: binding.model,
+        returnedModel: 'synthetic-fixture', promptVersion: binding.promptVersion, schemaVersion: binding.schemaVersion, contextVersion: binding.contextVersion,
+        inputTokens: 0, outputTokens: 0, usd: 0, startedAt: claim!.job.updatedAt, completedAt: claim!.job.updatedAt, validated: true },
+    }), 'The synthetic assistant fixture did not complete.');
     session = await service.getSession(owner, session.id);
     const proposal = session.editProposals[0], files = structuredClone(session.files), path = Object.keys(files).find(path => path.endsWith('.py'))!;
     files[path] += '\n# Later learner edit\n';

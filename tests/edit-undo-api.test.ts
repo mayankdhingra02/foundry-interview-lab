@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { practiceApi } from '../lib/server/practice-api';
@@ -20,7 +21,7 @@ describe('accepted edit undo HTTP boundary', () => {
     const identity = localIdentityCookie(), owner = identity.actor.id;
     let session = (await service.createSession(owner, { scenarioId: 'monetary-validation', requestId: randomUUID() })).session;
     await service.requestAssistant(owner, session.id, { requestId: randomUUID(), expectedRevision: session.revision, mode: 'edit', message: 'Synthetic HTTP edit' });
-    await service.completeJob((await service.claimJob('api-undo-fixture'))!, { kind: 'assistant', files: { 'quote.py': '# HTTP proposal' }, message: 'Synthetic', model: 'fixture', actualUsd: 0 });
+    await completeFixtureJob(service, (await service.claimJob('api-undo-fixture'))!, { kind: 'assistant', files: { 'quote.py': '# HTTP proposal' }, message: 'Synthetic', model: 'fixture', actualUsd: 0 });
     session = await service.getSession(owner, session.id); const proposalId = session.editProposals[0].id;
     session = (await service.decideEdit(owner, session.id, { requestId: randomUUID(), expectedRevision: session.revision, proposalId, decision: 'accept' })).session;
     const input = { requestId: randomUUID(), expectedRevision: session.revision, proposalId }, path = ['sessions', session.id, 'undo-edit'];

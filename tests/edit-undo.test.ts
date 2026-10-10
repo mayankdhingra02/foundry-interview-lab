@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { getScenario } from '../lib/content/scenarios';
@@ -10,7 +11,7 @@ async function setup(accept = true, noop = false) {
   const base = (await service.createSession('owner', { scenarioId: 'monetary-validation', requestId: randomUUID() })).session;
   await service.requestAssistant('owner', base.id, { requestId: randomUUID(), expectedRevision: base.revision, mode: 'edit', message: 'Synthetic proposal' });
   const claim = (await service.claimJob('fixture-worker'))!;
-  await service.completeJob(claim, { kind: 'assistant', message: 'Synthetic change', files: { 'quote.py': noop ? base.files['quote.py'] : '# Proposed change' }, model: 'fixture', actualUsd: 0 });
+  await completeFixtureJob(service, claim, { kind: 'assistant', message: 'Synthetic change', files: { 'quote.py': noop ? base.files['quote.py'] : '# Proposed change' }, model: 'fixture', actualUsd: 0 });
   let current = await service.getSession('owner', base.id); const proposalId = current.editProposals[0].id;
   current = (await service.decideEdit('owner', base.id, { requestId: randomUUID(), expectedRevision: current.revision, proposalId, decision: accept ? 'accept' : 'reject' })).session;
   const input = { requestId: randomUUID(), expectedRevision: current.revision, proposalId };

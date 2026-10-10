@@ -1,3 +1,4 @@
+import { completeFixtureJob } from './inference-fixtures';
 import { describe, expect, it } from 'vitest';
 import { getScenario } from '../lib/content/scenarios';
 import { buildEvidence } from '../lib/interview-practice/evidence';
@@ -36,7 +37,7 @@ describe('learner interview controls', () => {
     await service.command('owner', session.id, { action: 'finish', expectedRevision: session.revision, requestId: key() });
     const claim = (await service.claimJob('worker'))!;
     const scenario = getScenario(session.scenarioId)!, probe = scenario.probes.find(item => item.stageId === 'debrief')!;
-    await service.completeJob(claim, { kind: 'interviewer', model: 'authored', proposal: { action: 'ask_probe', question: probe.question, competencyId: probe.competencyId, probeId: probe.id, evidenceIds: [] }, actualUsd: 0 });
+    await completeFixtureJob(service, claim, { kind: 'interviewer', model: 'authored', proposal: { action: 'ask_probe', question: probe.question, competencyId: probe.competencyId, probeId: probe.id, evidenceIds: [] }, actualUsd: 0 });
     const current = await service.getSession('owner', session.id);
     const result = await interactions.interact('owner', session.id, { action: 'repeat', expectedRevision: current.revision, requestId: key() });
     expect(result.response).toBe(current.turns.at(-1)!.text); expect(result.questionId).toBe(current.turns.at(-1)!.id);

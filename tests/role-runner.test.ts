@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { loadRecipes, loadRuntimeCapture, materializeAttempt, conservativeReport, type BenchmarkAttempt } from '../evals/benchmark';
-import { compareRoleRuns, createRolePlan, recordRoleRun, roleReviewTemplate, roleRunSchema, type RoleExecutor, type RoleRun } from '../evals/role-runner';
+import { compareRoleRuns, createRolePlan, recordRoleRun, roleReviewTemplate, roleRunSchema, validateRoleRun, type RoleExecutor, type RoleRun } from '../evals/role-runner';
 import { authoredQuestion, PROMPT_VERSION, ProviderFailure } from '../lib/ai/provider';
+import { inferenceBindingDigest, type InferenceBinding } from '../lib/ai/binding';
 
 let version: string, attempt: BenchmarkAttempt;
 const temporary: string[] = [];
@@ -18,9 +19,9 @@ beforeEach(async () => {
   attempt = materializeAttempt(recipes.cases.find(row => row.id === 'money-starter')!, await loadRuntimeCapture());
 });
 afterEach(async () => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
-const inference = () => ({ requestedModel: 'gpt-5.4-mini', returnedModel: 'unit-mocked-model', promptVersion: PROMPT_VERSION, inputTokens: 1000, outputTokens: 200, responseId: 'unit-test-not-an-actual-provider-response', startedAt: '2026-10-09T13:00:00.000Z', completedAt: '2026-10-09T13:00:01.000Z', usd: 0.00165, validated: true });
+const inference = (binding?: InferenceBinding) => ({ requestedModel: 'gpt-5.4-mini', returnedModel: 'unit-mocked-model', promptVersion: PROMPT_VERSION, inputTokens: 1000, outputTokens: 200, responseId: 'unit-test-not-an-actual-provider-response', startedAt: '2026-10-09T13:00:00.000Z', completedAt: '2026-10-09T13:00:01.000Z', usd: 0.00165, validated: true, ...(binding ? { provider: binding.provider, role: binding.role, schemaVersion: binding.schemaVersion, contextVersion: binding.contextVersion, bindingDigest: inferenceBindingDigest(binding) } : {}) });
 const executor: RoleExecutor = async task => {
-  const common = { model: 'unit-mocked-model', inference: inference(), actualUsd: 0.00165 };
+  const common = { model: 'unit-mocked-model', inference: inference(task.inferenceBinding), actualUsd: 0.00165 };
   if (task.role === 'interviewer') return { kind: 'interviewer', proposal: authoredQuestion(task.attempt.scenario, task.session), ...common };
   if (task.role === 'coach') return { kind: 'coach', report: conservativeReport(task.attempt), promptVersion: PROMPT_VERSION, ...common };
   return { kind: 'assistant', message: 'Unit-only response; no provider was contacted.', files: {}, ...common };
@@ -91,6 +92,14 @@ describe('explicit role benchmark recording', () => {
     const result = await recordRoleRun(version, [attempt], { ...options(), roles: ['interviewer'], executor: async task => ({ ...await executor(task), inference: { ...inference(), validated: false } }) });
     expect(result.entries[0]).toMatchObject({ state: 'rejected', knownUsd: 0.00165, uncertainUsd: 0, output: null });
   });
+  it('does not let an executor replace the separately journaled policy', async () => {
+    const run = await recordRoleRun(version, [attempt], { ...options(), roles: ['assistant-ask'], executor: async task => {
+      task.inferenceBinding = { ...task.inferenceBinding, inputRate: 0.5 };
+      return executor(task);
+    } });
+    expect(run.entries[0]).toMatchObject({ state: 'rejected', output: null, knownUsd: 0.00165 });
+    expect(run.inferenceBindings![0].inputRate).toBe(0.75);
+  });
   it('stops at an unexpected provider cost above the admitted bound', async () => {
     const execute = vi.fn(async task => ({ ...await executor(task), inference: { ...inference(), usd: 1 }, actualUsd: 1 }));
     const result = await recordRoleRun(version, [attempt], { ...options(), executor: execute });
@@ -120,9 +129,48 @@ describe('explicit role benchmark recording', () => {
     expect(calls.slice(2).map(row => JSON.parse(row.input[0].content).mode)).toEqual(['ask', 'plan', 'edit']);
     for (const body of calls.slice(2)) expect(body.input[0].content).not.toContain(attempt.scenario.tests.find(test => !test.visible)!.source);
   });
+  it('executes the journaled policy after model, pricing and output settings drift', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'unit-test-key-never-sent'); vi.stubEnv('FEATURE_AI_INTERVIEW', 'true'); vi.stubEnv('FEATURE_REPORT_GENERATION', 'true');
+    const bodies: Array<{ model: string; max_output_tokens: number; text: { format: { name: string } } }> = [], journals: RoleRun[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)); bodies.push(body);
+      const value = body.text.format.name === 'foundry_coach' ? conservativeReport(attempt) : body.text.format.name === 'foundry_interviewer' ? authoredQuestion(attempt.scenario, attempt.session) : { message: 'Hypothetical captured-policy response.', files: [] };
+      return new Response(JSON.stringify({ id: `unit-policy-response-${bodies.length}`, status: 'completed', model: 'unit-resolved-snapshot', usage: { input_tokens: 1000, output_tokens: 200 }, output: [{ content: [{ type: 'output_text', text: JSON.stringify(value) }] }] }));
+    }));
+    const run = await recordRoleRun(version, [attempt], { ...options(), executor: undefined, persist: async row => {
+      journals.push(row);
+      vi.stubEnv('OPENAI_MODEL', 'different-current-model'); vi.stubEnv('OPENAI_INPUT_USD_PER_MILLION', 'invalid'); vi.stubEnv('OPENAI_OUTPUT_USD_PER_MILLION', '900'); vi.stubEnv('AI_MAX_OUTPUT_TOKENS', '600');
+    } });
+    expect(bodies).toHaveLength(5); expect(bodies.every(body => body.model === 'gpt-5.4-mini' && body.max_output_tokens === 2400)).toBe(true);
+    expect(run.entries.every(entry => entry.state === 'validated' && entry.knownUsd === 0.00165)).toBe(true);
+    expect(journals[0].inferenceBindings).toHaveLength(3);
+    expect(run.planned.map(row => row.reservedUsd)).toEqual(journals[0].planned.map(row => row.reservedUsd));
+    expect(validateRoleRun(run)).toEqual(run);
+  });
 });
 
 describe('offline model comparison and independent review handoff', () => {
+  it('reads historical recordings without binding fields and rejects partial provenance downgrades', async () => {
+    const run = await recordRoleRun(version, [attempt], options()), legacy = structuredClone(run);
+    delete legacy.inferenceBindings;
+    expect(() => validateRoleRun(legacy)).toThrow('missing its recorded policy');
+    for (const entry of legacy.entries) for (const field of ['provider', 'role', 'schemaVersion', 'contextVersion', 'bindingDigest'] as const) delete entry.inference?.[field];
+    vi.stubEnv('OPENAI_MODEL', 'invalid-current-model'); vi.stubEnv('OPENAI_INPUT_USD_PER_MILLION', 'invalid');
+    expect(validateRoleRun(legacy)).toEqual(legacy); expect(compareRoleRuns([legacy]).quality).toBe('pending-independent-human-review');
+    expect(roleReviewTemplate(legacy).cases).toHaveLength(5);
+  });
+  it('rejects altered recorded policy, reserve, role coverage and bound candidate identity offline', async () => {
+    const run = await recordRoleRun(version, [attempt], options());
+    const changes: Array<(copy: RoleRun) => void> = [
+      copy => { copy.policy.inputRate += 1; },
+      copy => { copy.inferenceBindings![0].reserveUsd += 0.01; },
+      copy => { copy.inferenceBindings!.pop(); },
+      copy => { copy.inferenceBindings!.push(copy.inferenceBindings![0]); },
+      copy => { copy.entries[0].inference!.bindingDigest = 'f'.repeat(64); },
+      copy => { delete copy.entries[0].inference!.schemaVersion; },
+    ];
+    for (const change of changes) { const copy = structuredClone(run); change(copy); expect(() => validateRoleRun(copy)).toThrow(); }
+  });
   it('reports coverage, complete-response latency and cost while keeping quality pending', async () => {
     const run = await recordRoleRun(version, [attempt], options()), comparison = compareRoleRuns([run]);
     expect(comparison.quality).toBe('pending-independent-human-review'); expect(comparison.rows).toHaveLength(5);
