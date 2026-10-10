@@ -15,6 +15,7 @@ The accepted policy is exported as `RETENTION_POLICY`, version `operational-rete
 | Deletion metadata | Both `createdAt` and `completedAt <= now - 30 days` | Completed cleanup, empty object inventory, no saved session or remaining dependent cache. |
 | Canonical saved attempt and immutable evidence | No expiry in this operation | Remain until learner deletion. |
 | Support cases, drafts, decisions, publications and audits | No expiry in this operation | Separate support retention policy and access controls apply. |
+| Permanent account fence and referenced cleanup anchor | No expiry in this operation | See [permanent account closing](account-closing.md); these survive Auth cascade and prevent reopening. |
 
 Days mean exact 24-hour UTC durations. Equality at the cutoff is eligible; a row one millisecond younger remains. The additional 30 days after deletion completion is intentionally conservative: old creation metadata cannot expire while cleanup is recent or unfinished.
 

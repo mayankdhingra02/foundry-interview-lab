@@ -7,7 +7,7 @@ import type { PracticeStore } from './store';
 const DAY = 86_400_000;
 export const RETENTION_POLICY = { version: 'operational-retention-v1', ledgerDays: 62, metadataDays: 30, defaultBatchRows: 100, maximumBatchRows: 1000, maximumScannedRows: 100_000 } as const;
 type Table = 'requests' | 'ledger' | 'deletions';
-type Reason = 'not_expired' | 'active_obligation' | 'ambiguous_reference' | 'unsettled_or_uncertain' | 'ambiguous_ledger' | 'current_budget_reference' | 'pending_cleanup' | 'referenced_metadata' | 'legacy_voice_counter';
+type Reason = 'not_expired' | 'active_obligation' | 'ambiguous_reference' | 'unsettled_or_uncertain' | 'ambiguous_ledger' | 'current_budget_reference' | 'pending_cleanup' | 'referenced_metadata' | 'legacy_voice_counter' | 'permanent_closing';
 type Counts = Record<Table, number>;
 export type RetentionResult = {
   policyVersion: typeof RETENTION_POLICY.version; mode: 'dry-run' | 'apply'; checkedAt: string;
@@ -23,7 +23,7 @@ export class RetentionError extends Error {
   }
 }
 const counts = (): Counts => ({ requests: 0, ledger: 0, deletions: 0 });
-const reasons = (): Record<Reason, number> => ({ not_expired: 0, active_obligation: 0, ambiguous_reference: 0, unsettled_or_uncertain: 0, ambiguous_ledger: 0, current_budget_reference: 0, pending_cleanup: 0, referenced_metadata: 0, legacy_voice_counter: 0 });
+const reasons = (): Record<Reason, number> => ({ not_expired: 0, active_obligation: 0, ambiguous_reference: 0, unsettled_or_uncertain: 0, ambiguous_ledger: 0, current_budget_reference: 0, pending_cleanup: 0, referenced_metadata: 0, legacy_voice_counter: 0, permanent_closing: 0 });
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const instant = z.string().datetime({ offset: true });
 function timestamp(value: unknown): number | undefined {
@@ -51,7 +51,7 @@ function plan(database: PracticeDatabase, options: RetentionOptions): { result: 
   if (!Number.isFinite(now) || !Number.isSafeInteger(limit) || limit < 1 || limit > RETENTION_POLICY.maximumBatchRows) throw new RetentionError('invalid_options');
   const requests = Object.entries(database.requests), sessions = Object.values(database.sessions), review = database.reviews;
   const scanned = requests.length + database.ledger.length + database.deletions.length + sessions.length + sessions.reduce((sum, session) => sum + session.jobs.length, 0)
-    + Object.values(review?.cases ?? {}).length + Object.values(review?.drafts ?? {}).length + Object.values(review?.decisions ?? {}).length + Object.values(review?.publications ?? {}).length + (review?.audits.length ?? 0);
+    + Object.values(review?.cases ?? {}).length + Object.values(review?.drafts ?? {}).length + Object.values(review?.decisions ?? {}).length + Object.values(review?.publications ?? {}).length + (review?.audits.length ?? 0) + Object.keys(database.accountClosings ?? {}).length;
   if (scanned > RETENTION_POLICY.maximumScannedRows) throw new RetentionError('scan_limit');
   const ledgerCutoff = now - RETENTION_POLICY.ledgerDays * DAY, metadataCutoff = now - RETENTION_POLICY.metadataDays * DAY;
   const result: RetentionResult = {
@@ -133,10 +133,12 @@ function plan(database: PracticeDatabase, options: RetentionOptions): { result: 
     const link = requestSession(record); return link.id ? JSON.stringify([record.ownerId, link.id]) : '';
   }));
   const deletionIdCounts = new Map<string, number>();
+  const permanentCleanupIds = new Set(Object.values(database.accountClosings ?? {}).map(item => item.cleanupId));
   database.deletions.forEach(entry => deletionIdCounts.set(entry.id, (deletionIdCounts.get(entry.id) ?? 0) + 1));
   for (const record of [...database.deletions].sort((a, b) => compare(a.createdAt, b.createdAt) || compare(a.id, b.id))) {
     let reason: Reason | undefined;
-    if (!validIdentity(record.id) || deletionIdCounts.get(record.id) !== 1 || !validIdentity(record.ownerId) || !validIdentity(record.sessionId) || timestamp(record.createdAt) === undefined) reason = 'ambiguous_reference';
+    if (permanentCleanupIds.has(record.id)) reason = 'permanent_closing';
+    else if (!validIdentity(record.id) || deletionIdCounts.get(record.id) !== 1 || !validIdentity(record.ownerId) || !validIdentity(record.sessionId) || timestamp(record.createdAt) === undefined) reason = 'ambiguous_reference';
     else if (!deletionComplete(record, now)) reason = 'pending_cleanup';
     else if (!expired(record.createdAt, metadataCutoff) || !expired(record.completedAt, metadataCutoff)) reason = 'not_expired';
     else if (database.sessions[record.sessionId] || protectedSessions.has(record.sessionId)) reason = 'active_obligation';

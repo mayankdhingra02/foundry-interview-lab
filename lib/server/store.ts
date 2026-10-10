@@ -5,10 +5,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { DomainError } from '../interview-practice/domain';
 import { parseSessionEvents } from '../interview-practice/events';
 import type { PracticeDatabase } from '../interview-practice/types';
+import { preserveAccountClosings, validateAccountClosings } from '../interview-practice/account-closing';
 
 export const emptyDatabase = (): PracticeDatabase => ({ schemaVersion: 1, sessions: {}, requests: {}, ledger: [], deletions: [] });
 /** Persistence validation rejects the whole operation; it never drops a bad replay record. */
 export function validateStoredEvents(database: PracticeDatabase) {
+  validateAccountClosings(database);
   try {
     for (const [id, session] of Object.entries(database.sessions)) {
       if (session.id !== id) throw new Error('invalid_session_identity');
@@ -21,9 +23,14 @@ export function validateStoredEvents(database: PracticeDatabase) {
 export interface PracticeStore {
   read(): Promise<PracticeDatabase>;
   transaction<T>(operation: (database: PracticeDatabase) => T | Promise<T>): Promise<T>;
+  /** Local adapters can create the map; PostgreSQL requires its dedicated migration. */
+  readonly supportsAccountClosing?: boolean;
+  /** Trusted transaction-only extension; returns no learner contents. */
+  captureOwnerObjectKeys?(ownerId: string): Promise<string[]>;
 }
 // This adapter deliberately targets one local machine. Public deployments must select a qualified database adapter.
 export class FilePracticeStore implements PracticeStore {
+  readonly supportsAccountClosing = true;
   readonly file: string;
   readonly lock: string;
   constructor(readonly directory: string, private readonly lockTimeoutMs = 10_000) {
@@ -85,7 +92,8 @@ export class FilePracticeStore implements PracticeStore {
     const release = await this.acquire();
     const temp = join(this.directory, `.${randomUUID()}.tmp`);
     try {
-      const database = await this.load(), result = await operation(database);
+      const database = await this.load(), before = structuredClone(database.accountClosings), result = await operation(database);
+      preserveAccountClosings({ ...database, accountClosings: before }, database);
       validateStoredEvents(database);
       const handle = await open(temp, 'wx', 0o600);
       try { await handle.writeFile(JSON.stringify(database)); await handle.sync(); } finally { await handle.close(); }
@@ -97,6 +105,7 @@ export class FilePracticeStore implements PracticeStore {
   }
 }
 export class MemoryPracticeStore implements PracticeStore {
+  readonly supportsAccountClosing = true;
   private database = emptyDatabase();
   private tail: Promise<void> = Promise.resolve();
   async read() { await this.tail; const copy = structuredClone(this.database); validateStoredEvents(copy); return copy; }
@@ -107,7 +116,7 @@ export class MemoryPracticeStore implements PracticeStore {
     await previous;
     try {
       const copy = structuredClone(this.database); validateStoredEvents(copy);
-      const result = await operation(copy); validateStoredEvents(copy);
+      const result = await operation(copy); validateStoredEvents(copy); preserveAccountClosings(this.database, copy);
       this.database = copy; return structuredClone(result);
     } finally { release(); }
   }

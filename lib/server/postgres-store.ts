@@ -5,6 +5,7 @@ import { canonical, digest, DomainError, requestKey } from '../interview-practic
 import type { EvidenceManifest, PracticeDatabase, ReviewDatabase, Session } from '../interview-practice/types';
 import { emptyDatabase, validateStoredEvents, type PracticeStore } from './store';
 import { HttpError } from './http';
+import { preserveAccountClosings } from '../interview-practice/account-closing';
 
 type EntityRow = { key: string; columns: Record<string, unknown>; value: unknown };
 type TableSpec = { table: string; keys: string[]; rows: EntityRow[] };
@@ -12,7 +13,8 @@ type RawRow = Record<string, unknown> & { runtime_payload: Record<string, unknow
 export type PostgresStoreOptions = { advisoryLockKey?: number; statementTimeoutMs?: number; lockTimeoutMs?: number; maxStateBytes?: number; maxEntityRows?: number };
 const tables = ['ai_practice_sessions', 'ai_practice_snapshots', 'ai_practice_events', 'ai_practice_jobs', 'ai_practice_reports', 'ai_practice_requests', 'ai_practice_usage_ledger', 'ai_practice_deletions', 'ai_practice_turns', 'ai_practice_runs', 'ai_practice_assistant_messages', 'ai_practice_edit_proposals', 'ai_practice_evidence_manifests'] as const;
 const reviewTables = ['ai_practice_review_cases','ai_practice_correction_drafts','ai_practice_correction_decisions','ai_practice_correction_publications','ai_practice_review_audits'] as const;
-type PracticeTable = typeof tables[number] | typeof reviewTables[number];
+const closingTable = 'ai_practice_account_closings' as const;
+type PracticeTable = typeof tables[number] | typeof reviewTables[number] | typeof closingTable;
 // Preserve every relational identity/state check and ordering input used by
 // load. Entity payloads already hold content; other JSON columns duplicate it.
 const readColumns: Record<PracticeTable, readonly string[]> = {
@@ -34,6 +36,7 @@ const readColumns: Record<PracticeTable, readonly string[]> = {
   ai_practice_correction_decisions: ['id','user_id','session_id','case_id','runtime_payload'],
   ai_practice_correction_publications: ['id','user_id','session_id','case_id','runtime_payload'],
   ai_practice_review_audits: ['id','user_id','session_id','case_id','runtime_payload'],
+  ai_practice_account_closings: ['opaque_owner_id','request_id','fingerprint','cleanup_id','created_at','runtime_payload'],
 };
 export type LoadTransportMetrics = { entityRows: number; fullRowJsonBytes: number; projectedRowJsonBytes: number };
 const json = (value: unknown) => JSON.stringify(value);
@@ -109,6 +112,7 @@ function specifications(database: PracticeDatabase): TableSpec[] {
       state: record.state, attempt: 0, created_at: record.createdAt, completed_at: record.completedAt ?? null,
       expires_at: new Date(new Date(record.createdAt).getTime() + 30 * 86_400_000).toISOString(),
     }))),
+    ...(database.accountClosings === undefined ? [] : [rows(closingTable, Object.values(database.accountClosings).map(record => entity(record.ownerId, record, { opaque_owner_id: record.ownerId, request_id: record.requestId, fingerprint: record.fingerprint, cleanup_id: record.cleanupId, created_at: record.createdAt })), ['opaque_owner_id'])]),
     ...reviewSpecifications(database),
   ];
 }
@@ -145,8 +149,10 @@ export class PostgresPracticeStore implements PracticeStore {
   private async load(client: PoolClient): Promise<PracticeDatabase> {
     const db = emptyDatabase(), records = new Map<string, RawRow[]>();
     // Additive rollout: baseline practice remains readable before the optional review migration.
-    const reviewReady = Boolean((await client.query("select to_regclass('public.ai_practice_review_cases') as table_name")).rows[0].table_name);
-    const present = [...tables, ...(reviewReady ? reviewTables : [])];
+    const discovered = (await client.query("select to_regclass('public.ai_practice_review_cases') as table_name, to_regclass('public.ai_practice_account_closings') as closing_table")).rows[0];
+    const reviewReady = Boolean(discovered.table_name), closingReady = Boolean(discovered.closing_table);
+    if (closingReady) db.accountClosings = {};
+    const present: PracticeTable[] = [...tables, ...(reviewReady ? reviewTables : []), ...(closingReady ? [closingTable] : [])];
     const counts = await this.preflight(client, present);
     for (const table of present) records.set(table, []);
     // A tagged row stream avoids one network roundtrip per table and avoids a
@@ -205,6 +211,13 @@ export class PostgresPracticeStore implements PracticeStore {
     for (const row of records.get('ai_practice_deletions')!) {
       const record = row.runtime_payload as unknown as PracticeDatabase['deletions'][number];
       if (record.id !== row.id || record.ownerId !== row.opaque_owner_id) throw unavailable(); db.deletions.push(record);
+    }
+    for (const row of records.get(closingTable) ?? []) {
+      const record = row.runtime_payload as unknown as NonNullable<PracticeDatabase['accountClosings']>[string];
+      const createdAt = row.created_at instanceof Date ? row.created_at.getTime() : Date.parse(String(row.created_at));
+      if (record.ownerId !== row.opaque_owner_id || record.requestId !== row.request_id || record.fingerprint !== row.fingerprint || record.cleanupId !== row.cleanup_id || Date.parse(record.createdAt) !== createdAt) throw unavailable();
+      if (Object.hasOwn(db.accountClosings!, record.ownerId)) throw unavailable();
+      db.accountClosings![record.ownerId] = record;
     }
     if (reviewReady) {
       const reviews: ReviewDatabase = { cases: {}, drafts: {}, decisions: {}, publications: {}, audits: [] }; db.reviews = reviews;
@@ -278,6 +291,8 @@ export class PostgresPracticeStore implements PracticeStore {
   private async persist(client: PoolClient, before: PracticeDatabase, after: PracticeDatabase) {
     if (after.schemaVersion !== 1 || Buffer.byteLength(json(after)) > this.options.maxStateBytes) throw new DomainError('unavailable', 'Initial persistence adapter capacity exceeded; changes were rolled back.');
     validateStoredEvents(after);
+    preserveAccountClosings(before, after);
+    if (before.accountClosings === undefined && after.accountClosings !== undefined) throw unavailable();
     this.validateImmutable(before, after);
     const previous = specifications(before), next = specifications(after);
     // Reject projected table growth before any entity writes. The existing
@@ -287,6 +302,8 @@ export class PostgresPracticeStore implements PracticeStore {
     // Durable deletion metadata survives auth/session cascades and is committed atomically with removal.
     const deletion = next.find(s => s.table === 'ai_practice_deletions')!;
     await this.sync(client, deletion, previous.find(s => s.table === deletion.table)!);
+    const closing = next.find(spec => spec.table === closingTable);
+    if (closing) await this.sync(client, closing, previous.find(spec => spec.table === closingTable)!);
     for (const old of Object.values(before.sessions)) if (!after.sessions[old.id]) await client.query('delete from public.ai_practice_sessions where id=$1 and user_id=$2', [old.id, old.ownerId]);
     // Verify every represented package, including unchanged sessions/replays,
     // with two bounded requests rather than two roundtrips per saved session.
@@ -309,14 +326,14 @@ export class PostgresPracticeStore implements PracticeStore {
       if (checked.size !== manifests.size) throw new DomainError('conflict', 'Published scenario version is immutable.');
     }
     for (const spec of next) {
-      if (spec.table === 'ai_practice_deletions') continue;
+      if (spec.table === 'ai_practice_deletions' || spec.table === closingTable) continue;
       // Session deletion already cascades private children. The generic diff may harmlessly delete absent rows.
       await this.sync(client, spec, previous.find(s => s.table === spec.table)!);
     }
     // Use the same table scope and byte/count metric as load while the same
     // transaction and advisory lock are held. Overflow rolls every write back
     // so the last acknowledged state remains readable, including for erasure.
-    await this.preflight(client, [...tables, ...(before.reviews ? reviewTables : [])]);
+    await this.preflight(client, [...tables, ...(before.reviews ? reviewTables : []), ...(before.accountClosings === undefined ? [] : [closingTable])]);
   }
   async read(): Promise<PracticeDatabase> {
     let client: PoolClient | undefined;
@@ -333,8 +350,8 @@ export class PostgresPracticeStore implements PracticeStore {
     let client: PoolClient | undefined;
     try {
       client = await this.pool.connect(); await client.query('begin isolation level repeatable read read only'); await this.setup(client);
-      const reviewReady = Boolean((await client.query("select to_regclass('public.ai_practice_review_cases') as table_name")).rows[0].table_name);
-      const present = [...tables, ...(reviewReady ? reviewTables : [])], counts = await this.preflight(client, present);
+      const discovered = (await client.query("select to_regclass('public.ai_practice_review_cases') as table_name, to_regclass('public.ai_practice_account_closings') as closing_table")).rows[0];
+      const present: PracticeTable[] = [...tables, ...(discovered.table_name ? reviewTables : []), ...(discovered.closing_table ? [closingTable] : [])], counts = await this.preflight(client, present);
       // SQL produces only table names and counts. No private JSON is transferred
       // or logged; full and projected sizes describe the exact same SQL snapshot.
       const result = await client.query<{ table_name: string; count: string; full_bytes: string; projected_bytes: string }>(present.map(table => `select '${table}'::text as table_name,count(*)::text as count,coalesce(sum(octet_length(to_jsonb(transport_source)::text)),0)::text as full_bytes,coalesce(sum(octet_length(to_jsonb(projected)::text)),0)::text as projected_bytes from public.${table} as transport_source cross join lateral (select ${readColumns[table].map(column => `transport_source.${column}`).join(',')}) as projected`).join(' union all '));
@@ -365,5 +382,17 @@ export class PostgresPracticeStore implements PracticeStore {
   }
   /** Trusted extensions can join the current transaction; never retain this client beyond the callback. */
   currentTransactionClient(): PoolClient | undefined { return this.transactionContext.getStore(); }
+  async captureOwnerObjectKeys(ownerId: string): Promise<string[]> {
+    const client = this.currentTransactionClient();
+    if (!client || this.options.advisoryLockKey !== 843_239_117 || !uuid.test(ownerId)) throw unavailable();
+    // Fixed table names, owner bound, and bounded transfer before cascading rows.
+    const inventory = 'select storage_key from public.ai_practice_artifacts where user_id=$1 union select storage_key from public.ai_practice_snapshots where user_id=$1 and storage_key is not null';
+    const metadata = (await client.query<{ count: string; bytes: string; maximum: string }>(`select count(*)::text as count,coalesce(sum(octet_length(storage_key)),0)::text as bytes,coalesce(max(octet_length(storage_key)),0)::text as maximum from (${inventory}) as inventory`, [ownerId])).rows[0];
+    const count = Number(metadata?.count), bytes = Number(metadata?.bytes), maximum = Number(metadata?.maximum);
+    if ([count, bytes, maximum].some(value => !Number.isSafeInteger(value) || value < 0) || count > 1000 || bytes > 200_000 || maximum > 2048) throw capacityExceeded();
+    const rows = (await client.query<{ storage_key: string }>(`select storage_key from (${inventory}) as inventory limit 1001`, [ownerId])).rows;
+    if (rows.length !== count || rows.some(row => typeof row.storage_key !== 'string' || !row.storage_key || Buffer.byteLength(row.storage_key) > 2048) || Buffer.byteLength(json(rows)) > 262_144) throw capacityExceeded();
+    return rows.map(row => row.storage_key).sort();
+  }
   async close() { if (this.ownsPool) await this.pool.end(); }
 }

@@ -1,4 +1,5 @@
 import 'server-only';
+import { assertAccountOpen } from '../interview-practice/account-closing';
 import { createHash } from 'node:crypto';
 import { ownedSession } from '../interview-practice/domain';
 import { HttpError } from '../server/http';
@@ -28,7 +29,8 @@ export async function boundedBytes(response: Response, limit: number, timeoutMs 
 export class VoiceService {
   constructor(private store: PracticeStore, private config: VoiceConfig, private fetcher: typeof fetch = fetch, private now: () => Date = () => new Date()) {}
   async checkOwner(ownerId: string, sessionId: string) {
-    const session = ownedSession((await this.store.read()).sessions, ownerId, sessionId); assertVoiceSession(session); return session;
+    const database = await this.store.read(); assertAccountOpen(database, ownerId);
+    const session = ownedSession(database.sessions, ownerId, sessionId); assertVoiceSession(session); return session;
   }
   private async call(path: string, body: BodyInit, contentType: string, signal?: AbortSignal) {
     return this.fetcher(`https://api.deepgram.com${path}`, {

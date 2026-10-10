@@ -5,6 +5,7 @@ import type { LedgerEntry, PracticeDatabase, Session } from '../interview-practi
 import { HttpError } from '../server/http';
 import type { PracticeStore } from '../server/store';
 import type { VoiceConfig } from './config';
+import { accountClosing, assertAccountOpen } from '../interview-practice/account-closing';
 
 type VoicePosting = {
   version: 1; key: string; operation: 'transcribe' | 'speak'; requestId: string;
@@ -128,6 +129,7 @@ export async function reserveVoice(store: PracticeStore, config: VoiceConfig, in
   assertRequestId(input.requestId);
   if (!Number.isFinite(input.seconds) || input.seconds <= 0 || !Number.isFinite(input.usd) || input.usd < 0 || !Number.isInteger(input.characters) || input.characters < 0) throw new HttpError(400, 'invalid_voice_usage', 'Voice usage was invalid.');
   return store.transaction(database => {
+    assertAccountOpen(database, input.ownerId);
     const session = ownedSession(database.sessions, input.ownerId, input.sessionId); assertVoiceSession(session);
     const at = now.toISOString(); const day = at.slice(0, 10);
     if (postings(database).some(entry => entry.ownerId === input.ownerId && entry.voice.requestId === input.requestId)) throw new DomainError('conflict', 'This audio request was already admitted. Its result is not stored for replay. Continue in text or make a new recording.');
@@ -165,7 +167,8 @@ export async function settleVoice(store: PracticeStore, reservation: VoiceReserv
     const session = database.sessions[reservation.sessionId];
     // Deletion may race with the provider. Keep only the content-free posting;
     // never recreate a deleted session or return audio/transcript after deletion.
-    closeReservation(database, admitted, uncertain || expired, now.toISOString());
-    return Boolean(!expired && session?.ownerId === reservation.ownerId && session.lifecycle === 'active' && session.configuration.voice === true && session.configuration.practiceConditions?.participation !== 'written-only' && session.stageId === 'debrief' && session.codeFrozenSnapshotId && !session.frozenEvidence);
+    const closing = Boolean(accountClosing(database, reservation.ownerId));
+    closeReservation(database, admitted, uncertain || expired || closing, now.toISOString());
+    return Boolean(!closing && !expired && session?.ownerId === reservation.ownerId && session.lifecycle === 'active' && session.configuration.voice === true && session.configuration.practiceConditions?.participation !== 'written-only' && session.stageId === 'debrief' && session.codeFrozenSnapshotId && !session.frozenEvidence);
   });
 }
