@@ -1,0 +1,13 @@
+# Preparation for the original five tasks
+
+The catalog and setup dialog now include suggested prerequisites for Monetary Validation, Extension Compatibility, Duplicate Invoice Incident, Inventory Reservations and Event Rollup. Each task has distinct preparation topics tied to its published contract and the existing reviewed Foundry lesson mappings. These are editorial drafts; independent content review and learner usability evidence remain pending. Prerequisites guide preparation and never block access, infer mastery, reveal a reference solution or change rubric ratings.
+
+`lib/content/preparation.ts` holds separately versioned advisory sidecars. Every record names the exact scenario ID, version and full hydrated package digest. A changed package, unknown ID or different version receives no inherited preparation. Returned guidance is a copy. The original manifests, reference/starter code, rubric, test suites and five benchmark package digests are preserved.
+
+`withScenarioPreparation` is used only when projecting the current catalog and progression recommendations. It is not used by session admission, the original package resolver, benchmark materialization, worker validation or historical exports. It adds public preparation metadata after the existing protected-material projection. Saved attempts retain their original task and frozen evidence; these sidecars do not reinterpret old findings. A future guidance revision must use an explicit new sidecar version and preserve the meaning of the reviewed package binding.
+
+Recommendations carry the same suggested prerequisites and add related lesson references to the existing deterministic study plan. Catalog/setup text remains available with Foundry navigation unset. Only the existing server-validated `FOUNDRY_SITE_ORIGIN` and exact authored lesson mappings can produce URLs in the study plan. Live routes, identity/return navigation and educational usefulness still require the chosen deployment and pilot.
+
+The three stock level drafts retain their existing in-package curriculum. Adding guidance to the original five does not change their difficulty labels, create new tasks or establish unseen-task learning transfer.
+
+Tests cover exact package binding, private-contract changes, unchanged packages/session digests, safe public projection, independent returned copies, all five distinct preparation sets, recommendations and configured/unconfigured lesson navigation. Browser checks cover readable prerequisites in catalog/setup, keyboard expansion and narrow layout. These checks do not constitute expert content approval.

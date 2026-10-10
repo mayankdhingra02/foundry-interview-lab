@@ -4,6 +4,11 @@ export type ScenarioPrerequisite = {
   id: string; title: string; description: string;
   lesson?: { id: string; foundryPath: string };
 };
+/** Separately versioned preparation guidance; never changes an attempt's task or rubric. */
+export type ScenarioPreparation = {
+  version: '1'; scenarioId: string; scenarioVersion: string; scenarioDigest: string;
+  reviewStatus: 'draft'; prerequisites: ScenarioPrerequisite[];
+};
 export type ScenarioCurriculum = {
   tier: PracticeTier; calibration: 'unreviewed';
   constraints: string[]; prerequisites: ScenarioPrerequisite[];
@@ -34,6 +39,8 @@ const lessonPaths: Readonly<Record<string, string>> = {
   correctness: '/dsa/foundations/correctness',
   'state-lifecycle-errors': '/low-level-design/lessons/state-lifecycle-errors',
   'concurrency-testability-evolution': '/low-level-design/lessons/concurrency-testability-evolution',
+  'relationships-interfaces': '/low-level-design/lessons/relationships-interfaces',
+  'responsibilities-ownership': '/low-level-design/lessons/responsibilities-ownership',
 };
 /** Exact authored lesson references only. Rendering a URL requires the existing
  * reviewed Foundry-origin integration; a prerequisite is never a skill lock. */
