@@ -1,0 +1,77 @@
+name: foundry-interview-lab
+services:
+  # Disposable SQL-shaped auth is for qualification, never a substitute for Supabase identity.
+  postgres:
+    profiles: [qualification]
+    image: postgres:16-alpine
+    pull_policy: never
+    environment:
+      POSTGRES_PASSWORD: disposable_foundry_local_only
+      POSTGRES_DB: foundry_qualification
+    ports: ["127.0.0.1:55432:5432"]
+    volumes:
+      - ./disposable-auth.sql:/docker-entrypoint-initdb.d/000_auth.sql:ro
+      - ./init-disposable.sh:/docker-entrypoint-initdb.d/999_migrations.sh:ro
+      - ../supabase/migrations:/foundry-migrations:ro
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d foundry_qualification"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    labels:
+      foundry.operations-qualification: "true"
+  web:
+    profiles: [app]
+    build:
+      context: ..
+      target: web
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+    env_file:
+      - path: ../.env.production
+        required: false
+    environment:
+      NODE_ENV: production
+      APP_URL: ${APP_URL:-http://127.0.0.1:3000}
+      FEATURE_VOICE: "false"
+      FEATURE_BILLING: "false"
+    ports: ["127.0.0.1:3000:3000"]
+    read_only: true
+    tmpfs: [/tmp, /app/.next/cache]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  worker:
+    profiles: [app]
+    build:
+      context: ..
+      target: worker
+    env_file:
+      - path: ../.env.production
+        required: false
+    environment:
+      NODE_ENV: production
+      RUNNER_MODE: docker
+      PYTHON_IMAGE: python:3.11-slim
+      RUNNER_ALLOWED_IMAGES: python:3.11-slim
+      FEATURE_VOICE: "false"
+      FEATURE_BILLING: "false"
+    # TRUSTED worker only. Socket access is host-administrative authority.
+    # The learner containers created by runner.ts receive no mounts/socket/secrets.
+    volumes: ["${FOUNDRY_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock"]
+    group_add: ["${FOUNDRY_DOCKER_GID:-0}"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 90s
