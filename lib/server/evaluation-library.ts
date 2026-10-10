@@ -6,6 +6,9 @@ import annotationsFile from '../../evals/fixtures/human-review.template.json';
 import baselineFile from '../../evals/fixtures/baseline-summary.json';
 import { annotationSchema, attemptContextDigest, attemptRecipeSchema, calculateReleaseGate, candidateDigest, candidateSetSchema, materializeAttempt, type AttemptRecipe, type RuntimeCapture } from '../../evals/benchmark';
 import { HttpError } from './http';
+import { digest } from '../interview-practice/domain';
+import type { CoachOutput, InterviewProposal } from '../interview-practice/types';
+import { assertReviewSourceBinding, evaluationApprovalBinding, readEvaluationReviewBundle, resolveDisplayApproval, type DisplayApproval, type EvaluationReviewBundle, type ReviewImport } from './evaluation-approval';
 
 // Explicitly curated developer fixtures. New repository cases require a source
 // and privacy review before being added; this is not a claim of expert approval.
@@ -16,7 +19,7 @@ type Label = { rubric: { criterionId: string; level: string }[]; claims: { id: s
 export type EvaluationDisagreement = { kind: 'rubric' | 'claim' | 'question'; item: string; reviewerOne: string; reviewerTwo: string; adjudication: string | null };
 export type EvaluationExampleSummary = {
   id: string; scenario: { id: string; title: string; version: string }; variant: AttemptRecipe['variant']; condition: string;
-  provenance: 'developer-authored-synthetic'; annotationStatus: 'pending' | 'partial' | 'adjudicated'; approvalStatus: 'pending' | 'blocked';
+  provenance: 'developer-authored-synthetic'; annotationStatus: 'pending' | 'partial' | 'adjudicated'; approvalStatus: DisplayApproval['status'];
   reviewCount: number; disagreementCount: number | null; candidateRecorded: boolean;
 };
 export type EvaluationExample = EvaluationExampleSummary & {
@@ -26,12 +29,14 @@ export type EvaluationExample = EvaluationExampleSummary & {
   execution: { status: string; relationshipToFinalSnapshot: 'same' | 'older' | 'not-executed'; recordedAt: string | null; runtimeDigest: string | null; suiteCount: number; passedSuites: number; failedSuites: number; unresolvedSuites: number; provenance: string };
   annotations: { status: EvaluationExampleSummary['annotationStatus']; reason: string; adjudicationRecorded: boolean; adjudicatedAt: string | null; disagreements: EvaluationDisagreement[] | null };
   candidate: { digest: string; model: string; promptVersion: string; rubricVersion: string; createdAt: string } | null;
+  displayApproval?: DisplayApproval;
+  approvedContent?: { report: CoachOutput; proposal: InterviewProposal; evidence: { id: string; kind: string; sha256: string; snapshotId?: string; runId?: string; turnId?: string }[] };
 };
 export type EvaluationLibrary = {
   benchmarkVersion: string; provenance: string; sourcePolicy: string; examples: EvaluationExampleSummary[];
-  qualification: { status: 'pending' | 'blocked' | 'passed'; reviewedAttempts: number; totalAttempts: number; recordedCandidates: number; pendingReasons: string[]; blockingReasons: string[]; baselineRecordedAt: string; approval: 'not-recorded' };
+  qualification: { status: 'pending' | 'blocked' | 'passed'; reviewedAttempts: number; totalAttempts: number; recordedCandidates: number; pendingReasons: string[]; blockingReasons: string[]; baselineRecordedAt: string; approval: 'not-recorded' | 'recorded'; approvedExamples?: number };
 };
-export type RepositoryEvaluationSources = { recipes: unknown; capture: RuntimeCapture; annotations: unknown; candidates: unknown | null; baseline: { generatedAt: string; regressions: { id: string; passed: boolean; detail: string }[] } };
+export type RepositoryEvaluationSources = { recipes: unknown; capture: RuntimeCapture; annotations: unknown; candidates: unknown | null; baseline: { generatedAt: string; regressions: { id: string; passed: boolean; detail: string }[] }; review?: ReviewImport };
 
 function disagreements(first: Label, second: Label, resolved: Label | null, criteria: { id: string; name: string }[]): EvaluationDisagreement[] {
   const rows: EvaluationDisagreement[] = [];
@@ -51,9 +56,15 @@ function disagreements(first: Label, second: Label, resolved: Label | null, crit
   return rows;
 }
 
-/** Fixed repository sources only. No PracticeStore, learner export or upload path. */
+/** Fixed synthetic task sources only. A private configured review bundle cannot
+ * replace recipes/captures or select PracticeStore, learner exports or uploads. */
 export function buildEvaluationRepository(sources: RepositoryEvaluationSources): { catalog: EvaluationLibrary; details: EvaluationExample[] } {
   const recipes = sourceSchema.parse(sources.recipes), annotations = annotationSchema.parse(sources.annotations), candidates = sources.candidates === null ? null : candidateSetSchema.parse(sources.candidates);
+  if (sources.review) {
+    assertReviewSourceBinding(sources.review, { ...sources, benchmarkVersion: recipes.version });
+    if (digest({ candidates, annotations }) !== digest({ candidates: sources.review.bundle.candidates, annotations: sources.review.bundle.annotations })) throw new HttpError(503, 'evaluation_review_unavailable', 'The configured evaluation review artifact is unavailable or invalid. No approved content is displayed.');
+    if (sources.review.bundle.approvals.some(row => !recipes.cases.some(recipe => recipe.id === row.binding.caseId))) throw new HttpError(503, 'evaluation_review_unavailable', 'The configured evaluation review artifact is unavailable or invalid. No approved content is displayed.');
+  }
   if (new Set(recipes.cases.map(row => row.id)).size !== recipes.cases.length) throw new Error('Invalid repository evaluation case identities.');
   if (annotations.benchmarkVersion !== recipes.version || (candidates && candidates.benchmarkVersion !== recipes.version)) throw new Error('Invalid repository evaluation versions.');
   for (const rows of [annotations.cases, candidates?.candidates ?? []]) if (new Set(rows.map(row => row.caseId)).size !== rows.length || rows.some(row => !recipes.cases.some(recipe => recipe.id === row.caseId))) throw new Error('Invalid repository evaluation case identities.');
@@ -69,25 +80,46 @@ export function buildEvaluationRepository(sources: RepositoryEvaluationSources):
     const status = adjudicated ? 'adjudicated' as const : reviews.length ? 'partial' as const : 'pending' as const;
     const knownDisagreements = distinctPair ? disagreements(reviews[0], reviews[1], adjudicated ? annotation!.adjudication : null, scenario.rubric) : null;
     const run = session.runs[0], finalSnapshot = session.snapshots.at(-1)!;
+    const displayApproval: DisplayApproval = candidate && !candidateBound ? { status: 'blocked', reason: 'binding-mismatch' } : resolveDisplayApproval(sources.review, recipes.version, attempt, candidate, annotation, adjudicated);
     return {
       id: recipe.id, scenario: { id: scenario.id, title: scenario.title, version: scenario.version }, variant: recipe.variant, condition: recipe.condition, provenance: 'developer-authored-synthetic', annotationStatus: status,
-      // Annotation completion is not an approval decision. The current artifact
-      // format has no explicit example-approval field; never invent one.
-      approvalStatus: scoped.blockingReasons.some(reason => /fabricated|solution leak|below|Candidate /.test(reason)) ? 'blocked' : 'pending', reviewCount: reviews.length, disagreementCount: knownDisagreements?.length ?? null, candidateRecorded: candidateBound,
+      // Display approval is deliberately separate from model-release quality.
+      // Approved teaching examples may show bad model output and disagreements.
+      approvalStatus: displayApproval.status,
+      displayApproval, reviewCount: reviews.length, disagreementCount: knownDisagreements?.length ?? null, candidateRecorded: candidateBound,
       source: { benchmarkVersion: recipes.version, provenance: recipes.provenance, fixturePath: 'evals/fixtures/attempts.json', contextDigest: attemptContextDigest(attempt), snapshotVersion: attempt.fixtureIdentity.version, snapshotSha256: attempt.fixtureIdentity.snapshotSha256, fixtureDigest: attempt.fixtureIdentity.digest },
       brief: { summary: scenario.summary, stages: scenario.stages.map(({ title, brief, requirements }) => ({ title, brief, requirements: [...requirements] })), rubric: scenario.rubric.map(({ id, name, description, anchors }) => ({ id, name, description, anchors: { ...anchors } })) },
       syntheticDialogue: [...recipe.answers], reviewFocus: [...recipe.reviewFocus],
       execution: { status: run?.status ?? (attempt.executionContext.kind === 'interrupted' ? 'interrupted' : 'not-executed'), relationshipToFinalSnapshot: !run ? 'not-executed' : run.snapshotSha256 === finalSnapshot.sha256 ? 'same' : 'older', recordedAt: run?.createdAt ?? null, runtimeDigest: run?.runtimeDigest ?? null, suiteCount: run?.tests.length ?? 0, passedSuites: run?.tests.filter(row => row.status === 'passed').length ?? 0, failedSuites: run?.tests.filter(row => ['failed', 'error'].includes(row.status)).length ?? 0, unresolvedSuites: run?.tests.filter(row => row.status === 'skipped').length ?? 0, provenance: run ? 'Actual captured isolated Docker observations; synthetic attempt and dialogue.' : attempt.executionContext.interruption ? `Developer-authored interruption state: ${attempt.executionContext.interruption.reason}, ${attempt.executionContext.interruption.phase}. No execution or timeout experiment was performed; no test result is recorded.` : 'No checks executed for this synthetic attempt.' },
       annotations: { status, reason: adjudicated ? 'Two distinct independent-review attestations and matching adjudication are recorded. Reviewer identity, independence and example approval still require the human review process.' : reviews.length ? 'Bound review labels are recorded, but the required independent pair and valid adjudication are incomplete.' : 'No validated model candidate with bound independent human reviews is recorded. Expert labels and disagreements remain unknown.', adjudicationRecorded: adjudicated, adjudicatedAt: adjudicated ? annotation!.adjudication!.completedAt : null, disagreements: knownDisagreements },
       candidate: candidateBound ? { digest: candidateDigest(candidate!), model: candidate!.model, promptVersion: candidate!.promptVersion, rubricVersion: candidate!.rubricVersion, createdAt: candidate!.createdAt } : null,
+      ...(displayApproval.status === 'approved' ? { approvedContent: { report: structuredClone(candidate!.report), proposal: structuredClone(candidate!.proposal), evidence: session.frozenEvidence!.items.map(({ id, kind, sha256, snapshotId, runId, turnId }) => ({ id, kind, sha256, ...(snapshotId ? { snapshotId } : {}), ...(runId ? { runId } : {}), ...(turnId ? { turnId } : {}) })) } } : {}),
     };
   });
   const examples = details.map(({ id, scenario, variant, condition, provenance, annotationStatus, approvalStatus, reviewCount, disagreementCount, candidateRecorded }) => ({ id, scenario, variant, condition, provenance, annotationStatus, approvalStatus, reviewCount, disagreementCount, candidateRecorded }));
-  return { catalog: { benchmarkVersion: recipes.version, provenance: recipes.provenance, sourcePolicy: 'Fixed developer-authored synthetic repository fixtures only. No learner attempts, support records or uploads are read. Human approval is not recorded by the current annotation format.', examples, qualification: { status: gate.status, reviewedAttempts: gate.metrics.reviewedAttempts, totalAttempts: attempts.length, recordedCandidates: details.filter(row => row.candidateRecorded).length, pendingReasons: gate.pendingReasons, blockingReasons: gate.blockingReasons, baselineRecordedAt: sources.baseline.generatedAt, approval: 'not-recorded' } }, details };
+  return { catalog: { benchmarkVersion: recipes.version, provenance: recipes.provenance, sourcePolicy: 'Fixed developer-authored synthetic repository fixtures only. No learner attempts, support records or uploads are read. Optional private review records authorize staff display only; they do not establish model qualification.', examples, qualification: { status: gate.status, reviewedAttempts: gate.metrics.reviewedAttempts, totalAttempts: attempts.length, recordedCandidates: details.filter(row => row.candidateRecorded).length, pendingReasons: gate.pendingReasons, blockingReasons: gate.blockingReasons, baselineRecordedAt: sources.baseline.generatedAt, approval: sources.review?.bundle.approvals.length ? 'recorded' : 'not-recorded', approvedExamples: details.filter(row => row.approvalStatus === 'approved').length } }, details };
 }
 
 export function repositoryEvaluations() {
   return buildEvaluationRepository({ recipes: recipesFile, capture: captureFile as RuntimeCapture, annotations: annotationsFile, candidates: null, baseline: baselineFile });
+}
+/** Offline preparation only: returns no approval, reviewer identity, attestation
+ * or decision. Operators keep the result outside Git and complete real review. */
+export function prepareEvaluationReviewBundle(candidateInput: unknown, annotationInput: unknown) {
+  const candidates = candidateSetSchema.parse(candidateInput), annotations = annotationSchema.parse(annotationInput);
+  const sources = { recipes: recipesFile, capture: captureFile as RuntimeCapture, baseline: baselineFile, candidates, annotations };
+  const library = buildEvaluationRepository(sources);
+  const bundle: EvaluationReviewBundle = { schemaVersion: 1, scope: 'fixed-synthetic-staff-display', benchmarkVersion: recipesFile.version, recipesDigest: digest(recipesFile), captureDigest: digest(captureFile), baselineDigest: digest(baselineFile), candidates, annotations, approvals: [] };
+  const bindings = library.details.filter(row => row.candidateRecorded && row.annotationStatus === 'adjudicated').map(row => {
+    const recipe = sourceSchema.parse(recipesFile).cases.find(recipe => recipe.id === row.id)!;
+    const attempt = materializeAttempt(recipe, sources.capture);
+    return evaluationApprovalBinding(recipesFile.version, attempt, candidates.candidates.find(candidate => candidate.caseId === row.id)!, annotations.cases.find(annotation => annotation.caseId === row.id)!, { candidates, annotations });
+  });
+  return { bundle, bindings };
+}
+export async function configuredRepositoryEvaluations() {
+  const review = await readEvaluationReviewBundle();
+  return buildEvaluationRepository({ recipes: recipesFile, capture: captureFile as RuntimeCapture, annotations: review?.bundle.annotations ?? annotationsFile, candidates: review?.bundle.candidates ?? null, baseline: baselineFile, ...(review ? { review } : {}) });
 }
 export function repositoryEvaluation(id: string) {
   const detail = repositoryEvaluations().details.find(row => row.id === id);
