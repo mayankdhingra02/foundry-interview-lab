@@ -37,8 +37,25 @@ describe.skipIf(!enabled)('voice admission on disposable PostgreSQL without spee
     await pool.query('truncate public.ai_practice_sessions cascade; truncate public.ai_practice_requests,public.ai_practice_usage_ledger,public.ai_practice_deletions; delete from auth.users');
     await pool.query('insert into auth.users(id) values ($1),($2)', [owner, other]);
   });
-  const create = async (actor = owner) => (await service.createSession(actor, { scenarioId: 'monetary-validation', requestId: randomUUID() })).session;
+  const create = async (actor = owner) => {
+    const session = (await service.createSession(actor, { scenarioId: 'monetary-validation', voice: true, requestId: randomUUID() })).session;
+    const finish = await service.command(actor,session.id,{ expectedRevision: session.revision,requestId: randomUUID(),action: 'finish' });
+    await service.cancelJob(actor,finish.job!.id,{ requestId: randomUUID() });
+    return service.getSession(actor,session.id);
+  };
   const input = (ownerId: string, sessionId: string, requestId = randomUUID()) => ({ ownerId, sessionId, requestId, operation: 'transcribe' as const, fingerprint: 'a'.repeat(64), seconds: 60, characters: 0, usd: .2 });
+  it('persists voice preference and rejects text, pre-debrief and legacy attempts before quota writes', async () => {
+    const text = (await service.createSession(owner,{ scenarioId: 'monetary-validation',requestId: randomUUID() })).session;
+    const selected = (await service.createSession(owner,{ scenarioId: 'monetary-validation',requestId: randomUUID(),voice: true })).session;
+    const second = new PostgresPracticeStore(servicePool), restored = await second.read();
+    expect(restored.sessions[text.id].configuration.voice).toBe(false);
+    expect(restored.sessions[selected.id].configuration.voice).toBe(true);
+    await expect(reserveVoice(second,config,input(owner,text.id))).rejects.toMatchObject({ code: 'voice_not_selected',status: 403 });
+    await expect(reserveVoice(second,config,input(owner,selected.id))).rejects.toMatchObject({ code: 'voice_debrief_required',status: 409 });
+    await store.transaction(db => { delete db.sessions[text.id].configuration.voice; });
+    await expect(reserveVoice(second,config,input(owner,text.id))).rejects.toMatchObject({ code: 'voice_not_selected' });
+    expect((await second.read()).ledger.filter(entry => entry.operationId.startsWith('voice:'))).toEqual([]);
+  });
   it('serializes a global minute cap across independent service-role adapters and roundtrips settlement', async () => {
     const a = await create(), b = await create(other); const second = new PostgresPracticeStore(servicePool);
     const results = await Promise.allSettled([reserveVoice(store, config, input(owner, a.id)), reserveVoice(second, config, input(other, b.id))]);

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { assertActive, assertRequestId, DomainError, ownedSession } from '../interview-practice/domain';
 import { budgetTotals } from '../interview-practice/quota';
-import type { LedgerEntry, PracticeDatabase } from '../interview-practice/types';
+import type { LedgerEntry, PracticeDatabase, Session } from '../interview-practice/types';
 import { HttpError } from '../server/http';
 import type { PracticeStore } from '../server/store';
 import type { VoiceConfig } from './config';
@@ -37,11 +37,18 @@ function append(database: PracticeDatabase, reservation: VoiceReservation, state
   } as VoiceLedgerEntry);
 }
 
+/** Setup preference never replaces explicit per-operation processing consent. */
+export function assertVoiceSession(session: Session) {
+  assertActive(session);
+  if (session.configuration.voice !== true) throw new HttpError(403, 'voice_not_selected', 'This attempt uses text. Select optional voice when starting a new attempt.');
+  if (session.stageId !== 'debrief' || !session.codeFrozenSnapshotId || session.frozenEvidence) throw new HttpError(409, 'voice_debrief_required', 'Voice answers are available during the debrief after Finish coding. Continue in text while working.');
+}
+
 export async function reserveVoice(store: PracticeStore, config: VoiceConfig, input: VoiceAdmission, now = new Date()): Promise<VoiceReservation> {
   assertRequestId(input.requestId);
   if (!Number.isFinite(input.seconds) || input.seconds <= 0 || !Number.isFinite(input.usd) || input.usd < 0 || !Number.isInteger(input.characters) || input.characters < 0) throw new HttpError(400, 'invalid_voice_usage', 'Voice usage was invalid.');
   return store.transaction(database => {
-    const session = ownedSession(database.sessions, input.ownerId, input.sessionId); assertActive(session);
+    const session = ownedSession(database.sessions, input.ownerId, input.sessionId); assertVoiceSession(session);
     const voice = postings(database); const at = now.toISOString(); const day = at.slice(0, 10);
     if (voice.some(entry => entry.ownerId === input.ownerId && entry.voice.requestId === input.requestId)) throw new DomainError('conflict', 'This audio request was already admitted. Its result is not stored for replay. Continue in text or make a new recording.');
     const dailyVoice = voice.filter(entry => entry.createdAt.slice(0, 10) === day);
@@ -78,6 +85,6 @@ export async function settleVoice(store: PracticeStore, reservation: VoiceReserv
       if (uncertain) session.usage.uncertainUsd += reservation.usd; else session.usage.spentUsd += reservation.usd;
     }
     append(database, reservation, uncertain ? 'uncertain' : 'settled', now.toISOString());
-    return Boolean(session?.ownerId === reservation.ownerId && session.lifecycle === 'active');
+    return Boolean(session?.ownerId === reservation.ownerId && session.lifecycle === 'active' && session.configuration.voice === true && session.stageId === 'debrief' && session.codeFrozenSnapshotId && !session.frozenEvidence);
   });
 }

@@ -1,11 +1,11 @@
 import 'server-only';
 import { createHash } from 'node:crypto';
-import { assertActive, ownedSession } from '../interview-practice/domain';
+import { ownedSession } from '../interview-practice/domain';
 import { HttpError } from '../server/http';
 import type { PracticeStore } from '../server/store';
 import { MAX_SPEAK_CHARACTERS, MAX_SPEAK_SECONDS, type VoiceConfig } from './config';
 import { mp3Duration, wavDuration } from './audio';
-import { reserveVoice, settleVoice } from './ledger';
+import { assertVoiceSession, reserveVoice, settleVoice } from './ledger';
 
 const hash = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 
@@ -28,7 +28,7 @@ export async function boundedBytes(response: Response, limit: number, timeoutMs 
 export class VoiceService {
   constructor(private store: PracticeStore, private config: VoiceConfig, private fetcher: typeof fetch = fetch, private now: () => Date = () => new Date()) {}
   async checkOwner(ownerId: string, sessionId: string) {
-    const session = ownedSession((await this.store.read()).sessions, ownerId, sessionId); assertActive(session); return session;
+    const session = ownedSession((await this.store.read()).sessions, ownerId, sessionId); assertVoiceSession(session); return session;
   }
   private async call(path: string, body: BodyInit, contentType: string, signal?: AbortSignal) {
     return this.fetcher(`https://api.deepgram.com${path}`, {
@@ -38,6 +38,7 @@ export class VoiceService {
   }
   async transcribe(ownerId: string, sessionId: string, requestId: string, audio: Uint8Array, consent: boolean, signal?: AbortSignal): Promise<string> {
     if (!consent) throw new HttpError(400, 'voice_consent_required', 'Allow speech processing before recording an answer.');
+    await this.checkOwner(ownerId, sessionId);
     const seconds = wavDuration(audio);
     const reservation = await reserveVoice(this.store, this.config, {
       ownerId, sessionId, requestId, operation: 'transcribe', fingerprint: hash(`transcribe:${requestId}:${seconds}`), seconds, characters: 0,

@@ -1,0 +1,5 @@
+.microphone-check { margin:16px 0; padding-top:16px; border-top:1px solid var(--line); }
+.microphone-check h3 { margin:0 0 8px; font-size:14px; }
+.microphone-check p { margin:8px 0; font-size:12px; line-height:1.5; }
+.microphone-check meter { width:100%; height:14px; }
+.microphone-check-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:10px; }

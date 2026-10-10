@@ -4,7 +4,9 @@ This workstream provides bounded REST speech requests alongside the text intervi
 
 ## Learner interaction
 
-The learner explicitly allows sending recordings and selected interviewer questions to Deepgram. Recording starts only after that choice and the browser's microphone permission. A recording stops at 60 seconds. The browser converts its in-memory recording to mono, 16 kHz, 16-bit PCM WAV; browsers that cannot decode and convert it show the text fallback.
+New attempts default to text. Session setup persists the explicit `voice` boolean; absent preferences on historical attempts mean voice is off. Selecting voice does not authorize provider processing or activate an unavailable provider. Fresh voice setup requires an explicitly triggered three-second local microphone input check. That check uses an in-memory input-level meter, makes no recording or upload, closes the audio context, and stops every media track on completion, cancellation, timeout or unmount. Permission denial, silence or unsupported browser APIs preserve the Text option. Interrupted start retries keep the original request body and do not automatically repeat microphone access.
+
+During the active debrief, the learner separately allows sending recordings and selected interviewer questions to Deepgram. Recording starts only after that choice and the browser's microphone permission. A recording stops at 60 seconds. The browser converts its in-memory recording to mono, 16 kHz, 16-bit PCM WAV; browsers that cannot decode and convert it show the text fallback. Configured voice before Finish coding is labeled as available during debrief rather than incorrectly described as unconfigured. Text-selected attempts and unavailable providers have distinct messages.
 
 Transcription appears in an editable review field. **Use transcript** copies it to the existing message composer. Only the ordinary authenticated turns endpoint commits the learner's reviewed text to evidence. Discarding a transcript creates no learner turn. Choosing another role tab, leaving the workspace, or changing session lifecycle releases the microphone and interrupts pending speech/playback. Cancel and Stop controls remain available during processing and playback.
 
@@ -18,7 +20,9 @@ The authenticated practice dispatcher calls:
 handleVoiceRequest(request, actor.id, sessionId, 'transcribe' | 'speak')
 ```
 
-The helper also checks same-origin mutation policy and POST method. The dispatcher must verify the actor first. The helper owner-checks an active session before parsing the recording and again atomically during admission.
+The helper also checks same-origin mutation policy and POST method. The dispatcher must verify the actor first. Before parsing the recording and again atomically during quota admission, the helper requires ownership, persisted `configuration.voice === true`, an active code-frozen debrief, and no final evidence freeze. Neither browser equipment-check state nor a claimed `consent` field can bypass these checks. Each provider operation still requires its separate explicit processing consent.
+
+The creation API preserves `voice` only when it is a boolean. Default/explicit false are the same text admission identity, so pre-upgrade creation retries that previously had false stripped remain replayable. True is distinct: a retry cannot silently upgrade an old text attempt whose unsupported true field was previously stripped. New creations normalize the saved preference to false or true. The optional typed field and existing configuration JSON allow old records to remain readable without a data migration.
 
 | Route | Required input | Success |
 | --- | --- | --- |
@@ -37,7 +41,7 @@ TTS accepts at most 1,500 UTF-16 code units of recorded question text. It reques
 
 Admission checks:
 
-- Ownership, active lifecycle, unique owner-scoped request key.
+- Ownership, saved voice opt-in, active code-frozen debrief, unique owner-scoped request key.
 - Per-session lifetime, per-user UTC-day, and global UTC-day allocated voice minutes. A cumulative session counter preserves its limit after old ledger rows expire.
 - Session committed spend, user UTC-day/month ledger spend, and global UTC-day ledger spend, including existing AI commitments. Voice shares AI's `MAX_MONTHLY_USER_USD` setting.
 - At most two pending speech requests per user and 32 globally.
@@ -48,7 +52,7 @@ The shared usage ledger receives a reservation with bounded content-free voice m
 
 A repeated request key returns a conflict and cannot invoke the provider again. Speech output is ephemeral and cannot be replayed through idempotency records. If the response is lost, the learner can continue in text or explicitly initiate a new, separately admitted recording/playback. Do not transparently retry a timed-out POST.
 
-If an attempt is deleted or becomes inactive while a request is running, the result is discarded. Settlement never recreates a deleted attempt. Deleting practice content retains limited usage counters so it cannot reset spend/minute caps. Ledger expiry metadata is 62 days in the shared adapter; deployment cleanup and recovery procedures must be qualified. Abandoned reservations remain conservative commitments and need operator review; they are not silently released by elapsed time.
+If an attempt is deleted, becomes inactive, or no longer permits voice while a request is running, the result is discarded. Settlement retains the actual settled/uncertain accounting and never recreates a deleted attempt. Deleting practice content retains limited usage counters so it cannot reset spend/minute caps. Ledger expiry metadata is 62 days in the shared adapter; deployment cleanup and recovery procedures must be qualified. Abandoned reservations remain conservative commitments and need operator review; they are not silently released by elapsed time.
 
 ## Configuration and qualification
 
@@ -87,9 +91,9 @@ Deepgram's March 5, 2026 changelog says PAYG/Growth customers can opt in or out 
 
 ## Tests and deferred work
 
-`tests/voice.test.ts` uses mocked HTTP responses to test consent, ownership, lifecycle, waveform validation, streamed size limits, saved-question playback, transcript non-persistence, uncertainty, duplicate admission, deletion races and simultaneous limits across all scopes. Fixtures test deterministic contracts; they do not establish provider quality.
+`tests/voice.test.ts` uses mocked HTTP responses to test saved opt-in, historical defaults, active debrief gating, consent, ownership, waveform validation, streamed size limits, saved-question playback, transcript non-persistence, uncertainty, duplicate admission, selection/deletion races and simultaneous limits across all scopes. `tests/practice-api.test.ts` covers creation/export persistence, schema validation and pre-upgrade text replay compatibility. Fixtures test deterministic contracts; they do not establish provider quality. Browser equipment tests use fake local media APIs and do not qualify real microphones, supported browsers or speech providers.
 
-`RUN_POSTGRES_INTEGRATION=1 npx vitest run tests/voice-postgres.integration.test.ts` creates a fresh local disposable Docker database, applies migrations 0001/0002/0004 and uses the actual service-role grants. It tests cross-adapter atomic admission, ledger roundtrip, deletion-resistant counters and database metadata constraints. It never reads a hosted DATABASE_URL or calls Deepgram.
+`RUN_POSTGRES_INTEGRATION=1 npx vitest run tests/voice-postgres.integration.test.ts` creates a fresh local disposable Docker database, applies migrations 0001/0002/0004/0007/0008 and uses the actual service-role grants. It tests persisted voice choices, pre-debrief/text/legacy denial, cross-adapter atomic admission, ledger roundtrip, deletion-resistant counters and database metadata constraints. It never reads a hosted DATABASE_URL or calls Deepgram. The new selection/gating regression requires fresh CI qualification; no local Docker or live speech call was made for this change.
 
 A LiveKit/full-duplex gateway, authenticated short-lived connection tickets, continuous STT, interruption-aware server turn detection, streaming TTS, reconnect reconciliation and coordinated cancellation remain a later workstream. There is no placeholder WebSocket endpoint or claim that press-to-talk implements those requirements.
 
