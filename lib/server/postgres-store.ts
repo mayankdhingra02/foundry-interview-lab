@@ -62,7 +62,7 @@ function specifications(database: PracticeDatabase): TableSpec[] {
     rows('ai_practice_usage_ledger', database.ledger.map(record => entity(record.id, record, {
       id: record.id, user_id: record.ownerId, opaque_session_id: record.sessionId, operation_id: record.operationId,
       kind: record.kind, amount_usd: record.amountUsd, created_at: record.createdAt,
-      expires_at: new Date(new Date(record.createdAt).getTime() + 30 * 86_400_000).toISOString(),
+      expires_at: new Date(new Date(record.createdAt).getTime() + 62 * 86_400_000).toISOString(),
     }))),
     rows('ai_practice_deletions', database.deletions.map(record => entity(record.id, record, {
       id: record.id, opaque_owner_id: record.ownerId, opaque_session_id: record.sessionId, inventory: json(record.objectKeys),
