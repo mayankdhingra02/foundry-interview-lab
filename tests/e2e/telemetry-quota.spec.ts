@@ -86,6 +86,31 @@ test('report admission ends at the rendered correlated report and feedback opens
   await expect(page.getByText('Staff-reviewed correction', { exact: true })).toBeVisible(); await expect.poll(() => data.observations.filter(item => item.event === 'feedback.opened').length).toBe(2); await page.getByLabel('Report version').selectOption(reportId); await expect(page.getByText('You are viewing an earlier report.', { exact: false })).toBeVisible(); await page.getByLabel('Report version').selectOption(corrected.id); expect(data.observations.filter(item => item.event === 'feedback.opened')).toHaveLength(2);
 });
 
+test('opening a saved report survives effect replay without aborting or duplicating its observation', async ({ page }) => {
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch;
+    const diagnostics = { feedbackRequests: 0, feedbackAborts: 0 };
+    Object.assign(window, { reportObservationDiagnostics: diagnostics });
+    window.fetch = function (input, init) {
+      if (typeof input === 'string' && input.endsWith('/observations') && typeof init?.body === 'string' && JSON.parse(init.body).event === 'feedback.opened') {
+        diagnostics.feedbackRequests++;
+        init.signal?.addEventListener('abort', () => { diagnostics.feedbackAborts++; }, { once: true });
+      }
+      return nativeFetch.call(this, input, init);
+    };
+  });
+  const session = attempt(true); session.lifecycle = 'completed'; session.reports.push(report());
+  const data = await fixture(page, session);
+  await page.goto(`/interview-practice/${id}`);
+  await expect(page.getByRole('heading', { name: 'Your practice review', exact: true })).toBeVisible();
+  await expect.poll(() => data.observations.filter(item => item.event === 'feedback.opened').length).toBe(1);
+  // A normal polling render must preserve per-version deduplication too.
+  await page.waitForResponse(response => response.url().endsWith(`/sessions/${id}`));
+  expect(await page.evaluate(() => (window as unknown as { reportObservationDiagnostics: unknown }).reportObservationDiagnostics)).toEqual({ feedbackRequests: 1, feedbackAborts: 0 });
+  expect(data.observations.filter(item => item.event === 'feedback.opened')).toHaveLength(1);
+  safe(data.observations);
+});
+
 test('observation HTTP and network failures never block saves, add an error or retry', async ({ page }) => {
   const data = await fixture(page); let observationCalls = 0;
   await page.route(`**/api/interview-practice/sessions/${id}/observations`, route => { observationCalls++; return observationCalls === 1 ? route.fulfill({ status: 503, json: { error: { message: 'Private telemetry sink failure' } } }) : route.abort('failed'); });
