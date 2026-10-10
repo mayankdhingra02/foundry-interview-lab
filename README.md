@@ -8,6 +8,8 @@ Foundry Interview Lab is an interview preparation product within Engineering Fou
 
 The core practice workflow is implemented in a stack of focused, unmerged [pull requests](https://github.com/mayankdhingra02/foundry-interview-lab/pulls). Additional design requirements and release evidence remain open. `main` contains the initial planning baseline until changes are reviewed and merged. See [delivery status](docs/delivery-status.md) for recorded checks and [the design acceptance audit](docs/design-acceptance.md) for remaining engineering and qualification work. The application has not been publicly deployed.
 
+The source repository is public at the owner's request. Its standard GitHub-hosted CI runners receive free public-repository minutes. Authored solutions, protected checks and development fixtures are public preparation material; “protected” describes omission from ordinary application responses. Private attempts and actual acceptance/holdout artifacts belong outside Git. See [CI and public-source boundaries](docs/ci.md#public-repository-and-actions-scope).
+
 ## Documentation
 
 - [Delivery status and release gates](docs/delivery-status.md).

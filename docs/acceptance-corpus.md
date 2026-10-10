@@ -52,6 +52,8 @@ The loader checks overlap against all 21 checked-in development cases and each e
 
 This cannot detect every paraphrase, undisclosed source or previously exposed artifact. The custodian must supply every relevant comparison corpus, restrict acceptance/holdout access, record exposure and avoid using those cases for prompt development. A successful overlap check is not a claim of independent holdout custody.
 
+The checked-in development cases and their authored scenario assets are now public. Copying or relabeling them cannot create an unexposed holdout. Newly collected private attempts on public tasks may support attempt-level feedback evaluation, with their task exposure recorded; they do not establish unseen-task-family transfer or resistance to possible memorization. Public availability alone does not prove prior exposure by a particular learner or model. The current loader resolves supported published scenario versions, not arbitrary private task packages. Independent fresh-task-family evaluation needs separately reviewed material and a qualified evaluation path. Keep its actual attempts, outputs, annotations and custody evidence outside Git. See [the public-source boundary](ci.md#public-repository-and-actions-scope).
+
 ## Import exact execution observations
 
 Capture files use `schemaVersion: 1`, `provenance: private-corpus-captures` and a bounded `captures` array. Each record requires:
