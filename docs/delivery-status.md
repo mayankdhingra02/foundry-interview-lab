@@ -34,6 +34,8 @@ Mayank has chosen friends and family as the proposed pilot recruitment pool and 
 
 ## Architecture and ownership
 
+The [host adapter](host-adapter.md) supplies an explicit verified-identity, service, policy and extension boundary for reusing Engineering Foundry's application. Its static route profiles retain standalone defaults and describe the proposed Foundry namespace. This software boundary does not mount the feature, integrate shared account deletion/export, apply migrations or qualify the existing hosted execution path.
+
 The Next application authenticates the owner, validates commands and admits durable work. A deterministic session service owns lifecycle, stage, files, immutable evidence, replay and budgets. A separate worker obtains fenced leases and performs external execution or inference outside transactions. PostgreSQL stores normalized private entities; local file storage is development-only. The current aggregate adapter serializes trusted writes and has explicit row/byte safety limits; it is a narrow-beta correctness adapter, not demonstrated large-scale storage.
 
 Foundry owns original content, rubric/competency definitions, interview policy, evidence contracts, output validation, progression, evaluation acceptance and operational accountability. Providers supply inference, speech, hosted identity/database, isolated compute and commerce. No foundation-model, speech-model or proprietary scoring-model training is required or implemented for this release. Outsourced implementation/content work still needs a named Foundry reviewer and the same tests/content acceptance; outsourcing cannot supply independent learning evidence by assertion.
