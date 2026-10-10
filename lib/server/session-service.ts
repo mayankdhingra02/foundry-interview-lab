@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendEvent, assertActive, assertCoding, assertRequestId, assertRevision, boundedText, createSnapshot, digest, DomainError, ownedSession, requestKey, selectedSnapshot, toPublicScenario, validateFiles } from '../interview-practice/domain';
 import { buildEvidence, freezeEvidence, validateInterviewProposal, validateReport } from '../interview-practice/evidence';
+import { budgetTotals, reservationBudgetAt } from '../interview-practice/quota';
 import type { InferenceRecord, JobClaim, JobKind, JobResult, JobView, Mutation, PracticeDatabase, PracticeJob, Scenario, Session, SessionConfiguration, SessionView } from '../interview-practice/types';
 import type { PracticeStore } from './store';
 
@@ -56,13 +57,11 @@ export class SessionService {
   }
   private reserve(db: PracticeDatabase, session: Session, job: PracticeJob, amount: number, now: string) {
     const commitment = session.usage.reservedUsd + session.usage.spentUsd + session.usage.uncertainUsd;
-    const daily = db.ledger.filter(l => l.ownerId === session.ownerId && l.createdAt.slice(0, 10) === now.slice(0, 10)).reduce((sum, l) => sum + l.amountUsd, 0);
-    const monthly = db.ledger.filter(l => l.ownerId === session.ownerId && l.createdAt.slice(0, 7) === now.slice(0, 7)).reduce((sum, l) => sum + l.amountUsd, 0);
-    const globalDaily = db.ledger.filter(l => l.createdAt.slice(0, 10) === now.slice(0, 10)).reduce((sum, l) => sum + l.amountUsd, 0);
+    const { userDailyUsd: daily, userMonthlyUsd: monthly, globalDailyUsd: globalDaily } = budgetTotals(db.ledger, session.ownerId, now);
     if (amount > 0 && (commitment + amount > this.limits.maxSessionUsd + 1e-9 || daily + amount > this.limits.maxDailyUsd + 1e-9 || monthly + amount > this.limits.maxMonthlyUsd + 1e-9 || globalDaily + amount > this.limits.maxGlobalDailyUsd + 1e-9)) throw new DomainError('quota', 'The AI budget cannot cover this request. Your work is still saved.');
     session.usage.reservedUsd += amount;
     job.reservationSequence = (job.reservationSequence ?? 0) + 1;
-    db.ledger.push({ id: randomUUID(), ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:reserve`, kind: 'reservation', amountUsd: amount, createdAt: now });
+    db.ledger.push({ id: randomUUID(), ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:reserve`, kind: 'reservation', amountUsd: amount, createdAt: now, budgetAt: now });
   }
   private enqueue(db: PracticeDatabase, session: Session, kind: JobKind, requestId: string, input: Record<string, unknown>, now: string): PracticeJob {
     if (kind === 'run' && session.usage.runs >= this.limits.maxRuns) throw new DomainError('quota', 'This attempt has reached its test-run limit.');
@@ -85,12 +84,13 @@ export class SessionService {
     if (actualUsd !== undefined && (!Number.isFinite(actualUsd) || actualUsd < 0 || actualUsd > 100)) throw new DomainError('invalid', 'Invalid provider usage settlement.');
     session.usage.reservedUsd = Math.max(0, session.usage.reservedUsd - job.reservedUsd);
     const actual = definitelyNotCalled ? 0 : actualUsd;
+    const budgetAt = reservationBudgetAt(db.ledger, { ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:reserve` });
     if (actual === undefined && job.reservedUsd > 0) {
       session.usage.uncertainUsd += job.reservedUsd;
-      db.ledger.push({ id: randomUUID(), ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:uncertain`, kind: 'uncertain', amountUsd: 0, createdAt: now });
+      db.ledger.push({ id: randomUUID(), ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:uncertain`, kind: 'uncertain', amountUsd: 0, createdAt: now, ...(budgetAt ? { budgetAt } : {}) });
     } else {
       session.usage.spentUsd += actual ?? 0; job.actualUsd = actual ?? 0;
-      db.ledger.push({ id: randomUUID(), ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:settle`, kind: 'settlement', amountUsd: (actual ?? 0) - job.reservedUsd, createdAt: now });
+      db.ledger.push({ id: randomUUID(), ownerId: session.ownerId, sessionId: session.id, operationId: `${job.id}:${job.reservationSequence}:settle`, kind: 'settlement', amountUsd: (actual ?? 0) - job.reservedUsd, createdAt: now, ...(budgetAt ? { budgetAt } : {}) });
     }
   }
   async createSession(ownerId: string, input: CreateSessionInput): Promise<SessionMutationResult> {
