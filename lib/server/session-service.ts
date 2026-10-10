@@ -271,7 +271,7 @@ export class SessionService {
       if (result.kind === 'run') {
         const run = result.run;
         if (!['completed', 'infrastructure_error', 'timeout'].includes(run.status) || !Number.isFinite(run.durationMs) || run.durationMs < 0 || typeof run.command !== 'string' || run.command.length > 1000 || typeof run.stdout !== 'string' || typeof run.stderr !== 'string' || run.stdout.length + run.stderr.length > 128_000 || !Array.isArray(run.tests) || run.tests.length > 100 || new Set(run.tests.map(t => t.id)).size !== run.tests.length || run.tests.some(t => !scenario.tests.some(test => test.id === t.id) || !['passed', 'failed', 'error', 'skipped'].includes(t.status) || typeof t.title !== 'string' || (t.detail?.length ?? 0) > 5000)) throw new DomainError('invalid', 'Runner returned invalid or unknown test observations.');
-        if (run.status !== 'completed' && run.tests.some(t => t.status === 'passed')) throw new DomainError('invalid', 'Infrastructure failure cannot report passing tests.');
+        if (run.status !== 'completed' && run.tests.length && run.tests.every(t => t.status === 'passed')) throw new DomainError('invalid', 'An incomplete run cannot claim every reported check passed. Retain completed observations alongside explicit missing checks.');
         const record = { ...structuredClone(run), id: randomUUID(), jobId: job.id, snapshotId: snapshot.id, snapshotSha256: snapshot.sha256, testSuiteDigest: String(job.input.testSuiteDigest), createdAt: now };
         session.runs.push(record); appendEvent(session, 'test.completed', { runId: record.id, jobId: job.id, snapshotId: snapshot.id, status: run.status }, job.requestId, now, 'runner');
       } else if (result.kind === 'interviewer') {

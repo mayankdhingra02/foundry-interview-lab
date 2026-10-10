@@ -90,6 +90,14 @@ describe('deterministic session ownership and mutation contracts', () => {
     await expect(service.completeJob(claim!, { kind: 'run', run: { status: 'completed', command: 'fixture', stdout: '', stderr: '', exitCode: 0, durationMs: 1, tests: [{ id: 'invented', title: 'Invented', status: 'passed' }] } })).rejects.toMatchObject({ code: 'invalid' });
     expect((await service.getSession('owner-a', session.id)).runs).toHaveLength(0);
   });
+  it('retains a completed check when a later check times out without claiming global success', async () => {
+    const service = serviceFor(), session = await create(service);
+    await service.requestRun('owner-a', session.id, mutation(session.revision));
+    const claim = await service.claimJob('worker');
+    await service.completeJob(claim!, { kind: 'run', run: { status: 'timeout', command: 'fixture', stdout: '', stderr: 'Deadline expired', exitCode: null, durationMs: 5, tests: [{ id: 'sum', title: 'Adds two values', status: 'passed' }, { id: 'private', title: 'Edge case', status: 'skipped', detail: 'No completed observation: time limit exceeded.' }] } });
+    const run = (await service.getSession('owner-a', session.id)).runs[0];
+    expect(run.status).toBe('timeout'); expect(run.tests.map(t => t.status)).toEqual(['passed', 'skipped']);
+  });
   it('rejects stale AI edits after manual work', async () => {
     const service = serviceFor(); let session = await create(service);
     session = (await service.requestAssistant('owner-a', session.id, { ...mutation(session.revision), mode: 'edit', message: 'Fix addition' })).session;
