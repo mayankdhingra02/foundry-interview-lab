@@ -1,0 +1,239 @@
+{
+  "generatedAt": "2026-10-09T20:22:29.769Z",
+  "provenance": "Developer-authored regression attempts using original Foundry scenario assets. Dialogue and edit decisions are synthetic; captured code-execution observations are identified separately. No learner data or expert labels.",
+  "scenarios": [
+    {
+      "id": "monetary-validation",
+      "version": "1.0.0",
+      "digest": "d3f2ac3863992c2b5f2cd2d9e11a0b99773d152c20e7c3dee14747ada9369a98"
+    },
+    {
+      "id": "extension-compatibility",
+      "version": "1.0.0",
+      "digest": "7ed7b5ad9fee02413374026a5f15c1ea0708fea7dd09808632e7b48ff3d8c8d3"
+    },
+    {
+      "id": "duplicate-invoice",
+      "version": "1.0.0",
+      "digest": "32cf761542641adc896bf8b95276f5c33dbd0ee9c2f221f7f6f663aafe4554fe"
+    },
+    {
+      "id": "inventory-reservations",
+      "version": "1.0.0",
+      "digest": "fbad580a10702b71c855b025ba69202fdc3a76b47bb99f8135ef109971ae3b0e"
+    },
+    {
+      "id": "event-rollup",
+      "version": "1.0.0",
+      "digest": "1d44d0cb79bc1a694e7d19051a20ddbb3bf2a9194c41dfc8a75ff2a0c581300f"
+    }
+  ],
+  "regressions": [
+    {
+      "id": "frozen-evidence:money-reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:money-starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:compatibility-reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:compatibility-starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:invoice-reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:invoice-starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:inventory-reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:inventory-starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:rollup-reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:rollup-starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:sparse-reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:confident-wrong",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:injection-dialogue",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:unexecuted-reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:stale-run",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:rejected-correct-edit",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "frozen-evidence:accepted-bad-edit",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "reject-unknown-evidence",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "reject-false-universal-pass:money-starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "reject-false-universal-pass:unexecuted-reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "reject-false-universal-pass:stale-run",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "injection-remains-quoted-evidence",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:monetary-validation:reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:monetary-validation:starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:extension-compatibility:reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:extension-compatibility:starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:duplicate-invoice:reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:duplicate-invoice:starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:inventory-reservations:reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:inventory-reservations:starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:event-rollup:reference",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "captured-runtime:event-rollup:starter",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    },
+    {
+      "id": "reject-stale-assistant-edit",
+      "passed": true,
+      "detail": "Application contract passed; this is not model-quality evidence."
+    }
+  ],
+  "release": {
+    "benchmarkVersion": "foundry-regression-2026-10-09-v1",
+    "scope": "AI feedback and interviewer benchmark; operational, accessibility, and learning-value gates remain separate",
+    "status": "pending",
+    "thresholds": {
+      "minimumAttempts": 40,
+      "evidenceResolution": 1,
+      "claimSupport": 0.95,
+      "rubricWithinOneBand": 0.85,
+      "questionRelevance": 0.9,
+      "fabricatedTestResults": 0,
+      "criticalSolutionLeaks": 0
+    },
+    "attemptCount": 17,
+    "deterministic": {
+      "passed": 33,
+      "total": 33
+    },
+    "metrics": {
+      "evidenceResolution": null,
+      "substantiveClaimSupport": null,
+      "rubricWithinOneBand": null,
+      "questionRelevance": null,
+      "fabricatedTestResults": null,
+      "criticalSolutionLeaks": null,
+      "humanWithinOneBand": null,
+      "reviewedAttempts": 0,
+      "sampledClaims": 0,
+      "sampledCriteria": 0,
+      "sampledQuestions": 0,
+      "byScenario": {},
+      "byCriterion": {}
+    },
+    "blockingReasons": [],
+    "pendingReasons": [
+      "Expand the curated set from 17 to at least 40 attempts, including held-out variants and consented pilot examples.",
+      "Recorded, validated model outputs are available for 0/17 attempts. No live model benchmark is inferred from fixtures.",
+      "Two independent human reviews and matching adjudication are complete for 0/17 candidate outputs.",
+      "No independently reviewed follow-up questions are available."
+    ]
+  }
+}

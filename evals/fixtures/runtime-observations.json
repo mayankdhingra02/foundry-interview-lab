@@ -1,0 +1,316 @@
+{
+  "version": 1,
+  "provenance": "actual-isolated-docker",
+  "captures": [
+    {
+      "scenarioId": "monetary-validation",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "d3f2ac3863992c2b5f2cd2d9e11a0b99773d152c20e7c3dee14747ada9369a98",
+      "variant": "reference",
+      "snapshotSha256": "b5141b8bfff1c833460a2222925eb2af6848ee626d6194ebf02f9a89787ea848",
+      "testSuiteDigest": "6bc115552931ee70899018944c6dd16e0f51debbf16b8abb0ae87151e602799a",
+      "recordedAt": "2026-10-09T20:01:22.635Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 0,
+        "tests": [
+          {
+            "id": "monetary-validation-public",
+            "title": "Public contract checks",
+            "status": "passed"
+          },
+          {
+            "id": "monetary-validation-protected",
+            "title": "Protected contract and edge checks",
+            "status": "passed"
+          }
+        ],
+        "durationMs": 1333,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    },
+    {
+      "scenarioId": "monetary-validation",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "d3f2ac3863992c2b5f2cd2d9e11a0b99773d152c20e7c3dee14747ada9369a98",
+      "variant": "starter",
+      "snapshotSha256": "ac3293c023546386a6c58839a8d4a2a97d2b8bf008eb3078e21ddd7ec2a1c60d",
+      "testSuiteDigest": "6bc115552931ee70899018944c6dd16e0f51debbf16b8abb0ae87151e602799a",
+      "recordedAt": "2026-10-09T20:01:23.553Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 1,
+        "tests": [
+          {
+            "id": "monetary-validation-public",
+            "title": "Public contract checks",
+            "status": "failed",
+            "detail": "_foundry_contract.QuotePublicTests.test_half_up: AssertionError: 0 != 1\n_foundry_contract.QuotePublicTests.test_negative_quantity: AssertionError: ValueError not raised"
+          },
+          {
+            "id": "monetary-validation-protected",
+            "title": "Protected contract and edge checks",
+            "status": "error",
+            "detail": "_foundry_contract.QuoteProtectedTests.test_invalid_numeric_values (value=True): AssertionError: ValueError not raised\n_foundry_contract.QuoteProtectedTests.test_invalid_numeric_values (value=False): AssertionError: ValueError not raised\n_foundry_contract.QuoteProtectedTests.test_invalid_numeric_values (value=1.0): AssertionError: ValueError not raised\n_foundry_contract.QuoteProtectedTests.test_invalid_numeric_values (value=-1): AssertionError: ValueError not raised\n_foundry_contract.QuoteProtectedTests.test_invalid_numeric_values: AssertionError: ValueError not raised\n_foundry_contract.QuoteProtectedTests.test_invalid_parameters: AssertionError: ValueError not raised\n_foundry_contract.QuoteProtectedTests.test_large_amount_exact: AssertionError: 18015299229407464 != 18015299229407460\n_foundry_contract.QuoteProtectedTests.test_invalid_numeric_values (value='1'): TypeError: unsupported operand type(s) for +: 'int' and 'str'\n_foundry_contract.QuoteProtectedTests.test_invalid_numeric_values (value=None): TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'"
+          }
+        ],
+        "durationMs": 913,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    },
+    {
+      "scenarioId": "extension-compatibility",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "7ed7b5ad9fee02413374026a5f15c1ea0708fea7dd09808632e7b48ff3d8c8d3",
+      "variant": "reference",
+      "snapshotSha256": "72891649377245459ccc8a86fe5a4354a3c3e1eaa0aa40a46d307223f2032ff4",
+      "testSuiteDigest": "3cd6678d057381995a81d4419f3869e42f846ab893236e2941ddfc866da2eae0",
+      "recordedAt": "2026-10-09T20:01:24.613Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 0,
+        "tests": [
+          {
+            "id": "extension-compatibility-public",
+            "title": "Public contract checks",
+            "status": "passed"
+          },
+          {
+            "id": "extension-compatibility-protected",
+            "title": "Protected contract and edge checks",
+            "status": "passed"
+          }
+        ],
+        "durationMs": 1060,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    },
+    {
+      "scenarioId": "extension-compatibility",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "7ed7b5ad9fee02413374026a5f15c1ea0708fea7dd09808632e7b48ff3d8c8d3",
+      "variant": "starter",
+      "snapshotSha256": "866f5085a5a77f4623966f0ce21f7025535d62e9969954bb2c15af816da323fa",
+      "testSuiteDigest": "3cd6678d057381995a81d4419f3869e42f846ab893236e2941ddfc866da2eae0",
+      "recordedAt": "2026-10-09T20:01:25.986Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 1,
+        "tests": [
+          {
+            "id": "extension-compatibility-public",
+            "title": "Public contract checks",
+            "status": "error",
+            "detail": "_foundry_contract.ExportPublicTests.test_filter_csv: AssertionError: 'order_id,status,amount_cents\\no-1,paid,120\\no-2,open,30\\n' != 'order_id,status,amount_cents\\no-1,paid,120\\n'\n  order_id,status,amount_cents\n  o-1,paid,120\n- o-2,open,30\n\n_foundry_contract.ExportPublicTests.test_jsonl: ValueError: unsupported format"
+          },
+          {
+            "id": "extension-compatibility-protected",
+            "title": "Protected contract and edge checks",
+            "status": "error",
+            "detail": "_foundry_contract.ExportProtectedTests.test_empty_and_unknown_filter: ValueError: unsupported format\n_foundry_contract.ExportProtectedTests.test_json_has_only_public_fields: ValueError: unsupported format"
+          }
+        ],
+        "durationMs": 1373,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    },
+    {
+      "scenarioId": "duplicate-invoice",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "32cf761542641adc896bf8b95276f5c33dbd0ee9c2f221f7f6f663aafe4554fe",
+      "variant": "reference",
+      "snapshotSha256": "b1fed50fb7535d3ef8735fa2b1edd94cfb33b6511d616a758ffa53c4f7c3ceab",
+      "testSuiteDigest": "d53ad56e9e0d2641345f76240d41fcdaa97a7d07d8b3d94483285ecd421a4882",
+      "recordedAt": "2026-10-09T20:01:27.074Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 0,
+        "tests": [
+          {
+            "id": "duplicate-invoice-public",
+            "title": "Public contract checks",
+            "status": "passed"
+          },
+          {
+            "id": "duplicate-invoice-protected",
+            "title": "Protected contract and edge checks",
+            "status": "passed"
+          }
+        ],
+        "durationMs": 1088,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    },
+    {
+      "scenarioId": "duplicate-invoice",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "32cf761542641adc896bf8b95276f5c33dbd0ee9c2f221f7f6f663aafe4554fe",
+      "variant": "starter",
+      "snapshotSha256": "f7329edf61edafd8bc6551aae2b59eef259f028089e4df13ee00c54b6eeae5d2",
+      "testSuiteDigest": "d53ad56e9e0d2641345f76240d41fcdaa97a7d07d8b3d94483285ecd421a4882",
+      "recordedAt": "2026-10-09T20:01:27.991Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 1,
+        "tests": [
+          {
+            "id": "duplicate-invoice-public",
+            "title": "Public contract checks",
+            "status": "failed",
+            "detail": "_foundry_contract.InvoicePublicTests.test_conflicting_amount: AssertionError: ValueError not raised\n_foundry_contract.InvoicePublicTests.test_identical_retry: AssertionError: 2 != 1"
+          },
+          {
+            "id": "duplicate-invoice-protected",
+            "title": "Protected contract and edge checks",
+            "status": "error",
+            "detail": "_foundry_contract.InvoiceProtectedTests.test_conflict_does_not_poison_connection: AssertionError: ValueError not raised\n_foundry_contract.InvoiceProtectedTests.test_invalid_events_do_not_write (event=PaymentEvent(merchant_id='', event_id='x', amount_cents=1)): AssertionError: ValueError not raised\n_foundry_contract.InvoiceProtectedTests.test_invalid_events_do_not_write (event=PaymentEvent(merchant_id='  ', event_id='x', amount_cents=1)): AssertionError: ValueError not raised\n_foundry_contract.InvoiceProtectedTests.test_invalid_events_do_not_write (event=PaymentEvent(merchant_id='a', event_id='x', amount_cents=True)): AssertionError: ValueError not raised\n_foundry_contract.InvoiceProtectedTests.test_invalid_events_do_not_write (event=PaymentEvent(merchant_id='a', event_id='x', amount_cents=1.5)): AssertionError: ValueError not raised\n_foundry_contract.InvoiceProtectedTests.test_invalid_events_do_not_write (event=PaymentEvent(merchant_id='a', event_id='x', amount_cents=0)): AssertionError: ValueError not raised\n_foundry_contract.InvoiceProtectedTests.test_invalid_events_do_not_write (event=PaymentEvent(merchant_id='a', event_id='x', amount_cents=-1)): AssertionError: ValueError not raised\n_foundry_contract.InvoiceProtectedTests.test_invalid_events_do_not_write: AssertionError: Lists differ: [(1, '', 'x', 1), (2, '  ', 'x', 1), (3, '[64 chars] -1)] != []\n\nFirst list contains 6 additional elements.\nFirst extra element 0:\n(1, '', 'x', 1)\n\n+ []\n- [(1, '', 'x', 1),\n-  (2, '  ', 'x', 1),\n-  (3, 'a', 'x', 1),\n-  (4, 'a', 'x', 1.5),\n-  (5, 'a', 'x', 0),\n-  (6, 'a', 'x', -1)]\n_foundry_contract.InvoiceProtectedTests.test_restart_and_distinct_delivery: AssertionError: 2 != 1\n_foundry_contract.InvoiceProtectedTests.test_invalid_events_do_not_write (event=PaymentEvent(merchant_id='a', event_id=None, amount_cents=1)): IntegrityError: NOT NULL constraint failed: invoices.event_id\n_foundry_contract.InvoiceProtectedTests.test_invalid_events_do_not_write (event=PaymentEvent(merchant_id=None, event_id='x', amount_cents=1)): IntegrityError: NOT NULL constraint failed: invoices.merchant_id"
+          }
+        ],
+        "durationMs": 916,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    },
+    {
+      "scenarioId": "inventory-reservations",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "fbad580a10702b71c855b025ba69202fdc3a76b47bb99f8135ef109971ae3b0e",
+      "variant": "reference",
+      "snapshotSha256": "add8efccf766cf8bd838014d028875a5079cefc74fe64aaeec8f1c0861b2cbd1",
+      "testSuiteDigest": "f4ccc8ae3c7e1dfaa65d4e8acc67719d77f925ac9355f3f928aeb4a7a0911d6f",
+      "recordedAt": "2026-10-09T20:01:28.925Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 0,
+        "tests": [
+          {
+            "id": "inventory-reservations-public",
+            "title": "Public contract checks",
+            "status": "passed"
+          },
+          {
+            "id": "inventory-reservations-protected",
+            "title": "Protected contract and edge checks",
+            "status": "passed"
+          }
+        ],
+        "durationMs": 934,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    },
+    {
+      "scenarioId": "inventory-reservations",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "fbad580a10702b71c855b025ba69202fdc3a76b47bb99f8135ef109971ae3b0e",
+      "variant": "starter",
+      "snapshotSha256": "2402ffcfa2b490011ac3a0e6db0553de3bec0e0b08578e31189482cf66ca1138",
+      "testSuiteDigest": "f4ccc8ae3c7e1dfaa65d4e8acc67719d77f925ac9355f3f928aeb4a7a0911d6f",
+      "recordedAt": "2026-10-09T20:01:29.890Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 1,
+        "tests": [
+          {
+            "id": "inventory-reservations-public",
+            "title": "Public contract checks",
+            "status": "failed",
+            "detail": "_foundry_contract.InventoryPublicTests.test_invalid_quantity: AssertionError: ValueError not raised"
+          },
+          {
+            "id": "inventory-reservations-protected",
+            "title": "Protected contract and edge checks",
+            "status": "failed",
+            "detail": "_foundry_contract.InventoryProtectedTests.test_concurrent_invariant: AssertionError: 16 != 5\n_foundry_contract.InventoryProtectedTests.test_invalid_and_independent_skus: AssertionError: ValueError not raised"
+          }
+        ],
+        "durationMs": 965,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    },
+    {
+      "scenarioId": "event-rollup",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "1d44d0cb79bc1a694e7d19051a20ddbb3bf2a9194c41dfc8a75ff2a0c581300f",
+      "variant": "reference",
+      "snapshotSha256": "73b656c1be3a5aadaa9987dc85ca6f34d13ed45db1d8b4779fc02e79121bdccc",
+      "testSuiteDigest": "ad2c58d6305cdd45b9d2993ab4192f528423e2911dc65cc61c5f9e2cb3596645",
+      "recordedAt": "2026-10-09T20:01:30.790Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 0,
+        "tests": [
+          {
+            "id": "event-rollup-public",
+            "title": "Public contract checks",
+            "status": "passed"
+          },
+          {
+            "id": "event-rollup-protected",
+            "title": "Protected contract and edge checks",
+            "status": "passed"
+          }
+        ],
+        "durationMs": 900,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    },
+    {
+      "scenarioId": "event-rollup",
+      "scenarioVersion": "1.0.0",
+      "scenarioDigest": "1d44d0cb79bc1a694e7d19051a20ddbb3bf2a9194c41dfc8a75ff2a0c581300f",
+      "variant": "starter",
+      "snapshotSha256": "e61510afd466efc599b80b07515e5a448b5311bf3db858041e5c5a177da06481",
+      "testSuiteDigest": "ad2c58d6305cdd45b9d2993ab4192f528423e2911dc65cc61c5f9e2cb3596645",
+      "recordedAt": "2026-10-09T20:01:31.683Z",
+      "run": {
+        "status": "completed",
+        "command": "docker isolated Python unittest (immutable snapshot; no host mounts or network)",
+        "stdout": "",
+        "stderr": "",
+        "exitCode": 1,
+        "tests": [
+          {
+            "id": "event-rollup-public",
+            "title": "Public contract checks",
+            "status": "failed",
+            "detail": "_foundry_contract.RollupPublicTests.test_refund_and_retry: AssertionError: Lists differ: [{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 230}] != [{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 70}]\n\nFirst differing element 0:\n{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 230}\n{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 70}\n\n- [{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 230}]\n?                                                         ^^\n\n+ [{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 70}]\n?                                                         ^\n\n_foundry_contract.RollupPublicTests.test_utc_day: AssertionError: Lists differ: [{'customer_id': 'a', 'day': '2026-01-02', 'net_cents': 100}] != [{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 100}]\n\nFirst differing element 0:\n{'customer_id': 'a', 'day': '2026-01-02', 'net_cents': 100}\n{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 100}\n\n- [{'customer_id': 'a', 'day': '2026-01-02', 'net_cents': 100}]\n?                                        ^\n\n+ [{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 100}]\n?                                        ^\n"
+          },
+          {
+            "id": "event-rollup-protected",
+            "title": "Protected contract and edge checks",
+            "status": "error",
+            "detail": "_foundry_contract.RollupProtectedTests.test_conflicting_event: AssertionError: ValueError not raised\n_foundry_contract.RollupProtectedTests.test_equivalent_instants_and_order: AssertionError: Lists differ: [{'cu[23 chars] '2025-12-31', 'net_cents': 10}, {'customer_id[101 chars] 10}] != [{'cu[23 chars] '2026-01-01', 'net_cents': 0}, {'customer_id'[40 chars] 10}]\n\nFirst differing element 0:\n{'customer_id': 'a', 'day': '2025-12-31', 'net_cents': 10}\n{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 0}\n\nFirst list contains 1 additional elements.\nFirst extra element 2:\n{'customer_id': 'z', 'day': '2026-01-01', 'net_cents': 10}\n\n- [{'customer_id': 'a', 'day': '2025-12-31', 'net_cents': 10},\n-  {'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 20},\n? ^                                                       -\n\n+ [{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 0},\n? ^\n\n   {'customer_id': 'z', 'day': '2026-01-01', 'net_cents': 10}]\n_foundry_contract.RollupProtectedTests.test_line_number_and_validation (bad='{'): AssertionError: \"line 3\\b\" does not match \"Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\"\n_foundry_contract.RollupProtectedTests.test_line_number_and_validation (bad='{\"event_id\": \"x\", \"customer_id\": \"a\", \"kind\": \"purchase\", \"amount_cents\": 10, \"occurred_at\": \"2026-01-01T00:00:00\"}'): AssertionError: ValueError not raised\n_foundry_contract.RollupProtectedTests.test_line_number_and_validation (bad='{\"event_id\": \"x\", \"customer_id\": \"a\", \"kind\": \"purchase\", \"amount_cents\": true, \"occurred_at\": \"2026-01-01T00:00:00+00:00\"}: AssertionError: ValueError not raised\n_foundry_contract.RollupProtectedTests.test_line_number_and_validation (bad='{\"event_id\": \"x\", \"customer_id\": \"a\", \"kind\": \"purchase\", \"amount_cents\": 0, \"occurred_at\": \"2026-01-01T00:00:00+00:00\"}'): AssertionError: ValueError not raised\n_foundry_contract.RollupProtectedTests.test_line_number_and_validation (bad='{\"event_id\": \"x\", \"customer_id\": \" \", \"kind\": \"purchase\", \"amount_cents\": 10, \"occurred_at\": \"2026-01-01T00:00:00+00:00\"}'): AssertionError: ValueError not raised\n_foundry_contract.RollupProtectedTests.test_line_number_and_validation (bad='{\"event_id\": \"x\", \"customer_id\": \"a\", \"kind\": \"other\", \"amount_cents\": 10, \"occurred_at\": \"2026-01-01T00:00:00+00:00\"}'): AssertionError: ValueError not raised\n_foundry_contract.RollupProtectedTests.test_refund_only_negative_and_day_sort: AssertionError: Lists differ: [{'cu[51 chars]2}, {'customer_id': 'a', 'day': '2026-01-03', 'net_cents': 3}] != [{'cu[51 chars]2}, {'customer_id': 'a', 'day': '2026-01-03', 'net_cents': -3}]\n\nFirst differing element 1:\n{'customer_id': 'a', 'day': '2026-01-03', 'net_cents': 3}\n{'customer_id': 'a', 'day': '2026-01-03', 'net_cents': -3}\n\n  [{'customer_id': 'a', 'day': '2026-01-01', 'net_cents': 2},\n-  {'customer_id': 'a', 'day': '2026-01-03', 'net_cents': 3}]\n+  {'customer_id': 'a', 'day': '2026-01-03', 'net_cents': -3}]\n?                                                         +\n\n_foundry_contract.RollupProtectedTests.test_line_number_and_validation (bad='[]'): TypeError: list indices must be integers or slices, not str"
+          }
+        ],
+        "durationMs": 893,
+        "runtimeDigest": "sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e"
+      }
+    }
+  ]
+}
