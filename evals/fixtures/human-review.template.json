@@ -1,5 +1,5 @@
 {
-  "benchmarkVersion": "foundry-regression-2026-10-09-v1",
+  "benchmarkVersion": "foundry-regression-2026-10-09-v2",
   "provenance": "human-review-required",
   "cases": [
     {
@@ -100,6 +100,30 @@
     },
     {
       "caseId": "accepted-bad-edit",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "money-partial-rounding",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "compatibility-alternative-unexecuted",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "inventory-interrupted-before-run",
+      "candidateDigest": null,
+      "reviews": [],
+      "adjudication": null
+    },
+    {
+      "caseId": "rollup-interrupted-during-run",
       "candidateDigest": null,
       "reviews": [],
       "adjudication": null

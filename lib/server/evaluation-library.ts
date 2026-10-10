@@ -4,23 +4,23 @@ import recipesFile from '../../evals/fixtures/attempts.json';
 import captureFile from '../../evals/fixtures/runtime-observations.json';
 import annotationsFile from '../../evals/fixtures/human-review.template.json';
 import baselineFile from '../../evals/fixtures/baseline-summary.json';
-import { annotationSchema, attemptContextDigest, calculateReleaseGate, candidateDigest, candidateSetSchema, materializeAttempt, type AttemptRecipe, type RuntimeCapture } from '../../evals/benchmark';
+import { annotationSchema, attemptContextDigest, attemptRecipeSchema, calculateReleaseGate, candidateDigest, candidateSetSchema, materializeAttempt, type AttemptRecipe, type RuntimeCapture } from '../../evals/benchmark';
 import { HttpError } from './http';
 
 // Explicitly curated developer fixtures. New repository cases require a source
 // and privacy review before being added; this is not a claim of expert approval.
-const CASE_IDS = ['money-reference', 'money-starter', 'compatibility-reference', 'compatibility-starter', 'invoice-reference', 'invoice-starter', 'inventory-reference', 'inventory-starter', 'rollup-reference', 'rollup-starter', 'sparse-reference', 'confident-wrong', 'injection-dialogue', 'unexecuted-reference', 'stale-run', 'rejected-correct-edit', 'accepted-bad-edit'] as const;
-const recipeSchema = z.object({ id: z.enum(CASE_IDS), scenarioId: z.string().max(100), variant: z.enum(['reference', 'starter']), condition: z.string().max(100), answers: z.array(z.string().max(6000)).max(20), reviewFocus: z.array(z.string().max(500)).max(20), omitRun: z.boolean().optional(), changeAfterRun: z.boolean().optional(), edit: z.enum(['rejected-correct', 'accepted-bad']).optional() }).strict();
+const CASE_IDS = ['money-reference', 'money-starter', 'compatibility-reference', 'compatibility-starter', 'invoice-reference', 'invoice-starter', 'inventory-reference', 'inventory-starter', 'rollup-reference', 'rollup-starter', 'sparse-reference', 'confident-wrong', 'injection-dialogue', 'unexecuted-reference', 'stale-run', 'rejected-correct-edit', 'accepted-bad-edit', 'money-partial-rounding', 'compatibility-alternative-unexecuted', 'inventory-interrupted-before-run', 'rollup-interrupted-during-run'] as const;
+const recipeSchema = attemptRecipeSchema.extend({ id: z.enum(CASE_IDS) });
 const sourceSchema = z.object({ version: z.string().min(1).max(100), provenance: z.string().max(1000), cases: z.array(recipeSchema).min(1).max(60) }).strict();
 type Label = { rubric: { criterionId: string; level: string }[]; claims: { id: string; supported: boolean; fabricatedTestResult: boolean }[]; questions: { id: string; relevant: boolean; criticalSolutionLeak: boolean }[] };
 export type EvaluationDisagreement = { kind: 'rubric' | 'claim' | 'question'; item: string; reviewerOne: string; reviewerTwo: string; adjudication: string | null };
 export type EvaluationExampleSummary = {
-  id: string; scenario: { id: string; title: string; version: string }; variant: 'reference' | 'starter'; condition: string;
+  id: string; scenario: { id: string; title: string; version: string }; variant: AttemptRecipe['variant']; condition: string;
   provenance: 'developer-authored-synthetic'; annotationStatus: 'pending' | 'partial' | 'adjudicated'; approvalStatus: 'pending' | 'blocked';
   reviewCount: number; disagreementCount: number | null; candidateRecorded: boolean;
 };
 export type EvaluationExample = EvaluationExampleSummary & {
-  source: { benchmarkVersion: string; provenance: string; fixturePath: string; contextDigest: string };
+  source: { benchmarkVersion: string; provenance: string; fixturePath: string; contextDigest: string; snapshotVersion?: string; snapshotSha256?: string; fixtureDigest?: string };
   brief: { summary: string; stages: { title: string; brief: string; requirements: string[] }[]; rubric: { id: string; name: string; description: string; anchors: { strong: string; developing: string; needsWork: string } }[] };
   syntheticDialogue: string[]; reviewFocus: string[];
   execution: { status: string; relationshipToFinalSnapshot: 'same' | 'older' | 'not-executed'; recordedAt: string | null; runtimeDigest: string | null; suiteCount: number; passedSuites: number; failedSuites: number; unresolvedSuites: number; provenance: string };
@@ -74,10 +74,10 @@ export function buildEvaluationRepository(sources: RepositoryEvaluationSources):
       // Annotation completion is not an approval decision. The current artifact
       // format has no explicit example-approval field; never invent one.
       approvalStatus: scoped.blockingReasons.some(reason => /fabricated|solution leak|below|Candidate /.test(reason)) ? 'blocked' : 'pending', reviewCount: reviews.length, disagreementCount: knownDisagreements?.length ?? null, candidateRecorded: candidateBound,
-      source: { benchmarkVersion: recipes.version, provenance: recipes.provenance, fixturePath: 'evals/fixtures/attempts.json', contextDigest: attemptContextDigest(attempt) },
+      source: { benchmarkVersion: recipes.version, provenance: recipes.provenance, fixturePath: 'evals/fixtures/attempts.json', contextDigest: attemptContextDigest(attempt), snapshotVersion: attempt.fixtureIdentity.version, snapshotSha256: attempt.fixtureIdentity.snapshotSha256, fixtureDigest: attempt.fixtureIdentity.digest },
       brief: { summary: scenario.summary, stages: scenario.stages.map(({ title, brief, requirements }) => ({ title, brief, requirements: [...requirements] })), rubric: scenario.rubric.map(({ id, name, description, anchors }) => ({ id, name, description, anchors: { ...anchors } })) },
       syntheticDialogue: [...recipe.answers], reviewFocus: [...recipe.reviewFocus],
-      execution: { status: run?.status ?? 'not-executed', relationshipToFinalSnapshot: !run ? 'not-executed' : run.snapshotSha256 === finalSnapshot.sha256 ? 'same' : 'older', recordedAt: run?.createdAt ?? null, runtimeDigest: run?.runtimeDigest ?? null, suiteCount: run?.tests.length ?? 0, passedSuites: run?.tests.filter(row => row.status === 'passed').length ?? 0, failedSuites: run?.tests.filter(row => ['failed', 'error'].includes(row.status)).length ?? 0, unresolvedSuites: run?.tests.filter(row => row.status === 'skipped').length ?? 0, provenance: run ? 'Actual captured isolated Docker observations; synthetic attempt and dialogue.' : 'No checks executed for this synthetic attempt.' },
+      execution: { status: run?.status ?? (attempt.executionContext.kind === 'interrupted' ? 'interrupted' : 'not-executed'), relationshipToFinalSnapshot: !run ? 'not-executed' : run.snapshotSha256 === finalSnapshot.sha256 ? 'same' : 'older', recordedAt: run?.createdAt ?? null, runtimeDigest: run?.runtimeDigest ?? null, suiteCount: run?.tests.length ?? 0, passedSuites: run?.tests.filter(row => row.status === 'passed').length ?? 0, failedSuites: run?.tests.filter(row => ['failed', 'error'].includes(row.status)).length ?? 0, unresolvedSuites: run?.tests.filter(row => row.status === 'skipped').length ?? 0, provenance: run ? 'Actual captured isolated Docker observations; synthetic attempt and dialogue.' : attempt.executionContext.interruption ? `Developer-authored interruption state: ${attempt.executionContext.interruption.reason}, ${attempt.executionContext.interruption.phase}. No execution or timeout experiment was performed; no test result is recorded.` : 'No checks executed for this synthetic attempt.' },
       annotations: { status, reason: adjudicated ? 'Two distinct independent-review attestations and matching adjudication are recorded. Reviewer identity, independence and example approval still require the human review process.' : reviews.length ? 'Bound review labels are recorded, but the required independent pair and valid adjudication are incomplete.' : 'No validated model candidate with bound independent human reviews is recorded. Expert labels and disagreements remain unknown.', adjudicationRecorded: adjudicated, adjudicatedAt: adjudicated ? annotation!.adjudication!.completedAt : null, disagreements: knownDisagreements },
       candidate: candidateBound ? { digest: candidateDigest(candidate!), model: candidate!.model, promptVersion: candidate!.promptVersion, rubricVersion: candidate!.rubricVersion, createdAt: candidate!.createdAt } : null,
     };

@@ -12,7 +12,7 @@ describe('evaluation API exact staff access and fixed source boundary', () => {
   afterEach(() => vi.unstubAllEnvs());
   it('serves no-store list/detail without initializing practice, billing or support data', async () => {
     const response = await internalReviewApi(request(), ['evaluations']); expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('private, no-store');
-    const result = await response.json(); expect(result.examples).toHaveLength(17); expect(result.qualification.reviewedAttempts).toBe(0);
+    const result = await response.json(); expect(result.examples).toHaveLength(21); expect(result.qualification.reviewedAttempts).toBe(0);
     const detail = await internalReviewApi(request('/money-reference'), ['evaluations', 'money-reference']); expect(detail.status).toBe(200); expect((await detail.json()).example.annotationStatus).toBe('pending');
     expect(mocks.service).not.toHaveBeenCalled();
   });

@@ -23,7 +23,7 @@ function hypotheticalReviewedSource() {
 describe('fixed synthetic evaluation repository projection', () => {
   it('keeps all current examples and quality qualification explicitly pending', () => {
     const library = repositoryEvaluations();
-    expect(library.catalog.examples).toHaveLength(17); expect(new Set(library.catalog.examples.map(row => row.scenario.id)).size).toBe(5);
+    expect(library.catalog.examples).toHaveLength(21); expect(new Set(library.catalog.examples.map(row => row.scenario.id)).size).toBe(5);
     expect(library.catalog.qualification).toMatchObject({ status: 'pending', reviewedAttempts: 0, recordedCandidates: 0, approval: 'not-recorded' });
     expect(library.details.every(row => row.approvalStatus === 'pending' && row.annotationStatus === 'pending' && row.disagreementCount === null && row.annotations.disagreements === null)).toBe(true);
   });

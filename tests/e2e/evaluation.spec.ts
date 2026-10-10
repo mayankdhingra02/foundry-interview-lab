@@ -48,3 +48,15 @@ test('denied staff access never loads evaluation examples', async ({ page }) => 
   await page.goto('/internal'); await expect(page.getByText('This console requires an authorized staff account.')).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Evaluation', exact: true })).toHaveCount(0); expect(reads).toBe(0);
 });
+
+test('versioned interrupted fixture shows absent evidence without fabricated suite outcomes', async ({ page }) => {
+  await fixtures(page);
+  const interrupted: EvaluationExample = { ...example, variant: 'custom', condition: 'interrupted-without-completed-observation', source: { ...example.source, snapshotVersion: '1.0.1', snapshotSha256: 'c'.repeat(64), fixtureDigest: 'd'.repeat(64) }, execution: { status: 'interrupted', relationshipToFinalSnapshot: 'not-executed', recordedAt: null, runtimeDigest: null, suiteCount: 0, passedSuites: 0, failedSuites: 0, unresolvedSuites: 0, provenance: 'Developer-authored interruption state: disconnect, during-execution. No execution or timeout experiment was performed; no test result is recorded.' } };
+  await page.route('**/api/internal/evaluations/injection-dialogue', route => route.fulfill({ json: { example: interrupted } }));
+  await page.goto('/internal'); await page.getByRole('tab', { name: 'Evaluation', exact: true }).click(); await page.getByRole('button', { name: /injection-dialogue/ }).click();
+  const detail = page.getByRole('article', { name: 'Synthetic example detail' });
+  await expect(detail).toContainText('No executed test evidence.'); await expect(detail).toContainText('No execution or timeout experiment was performed');
+  await expect(detail).toContainText('Fixture snapshot version 1.0.1.'); await expect(detail).toContainText('c'.repeat(64)); await expect(detail).toContainText('d'.repeat(64));
+  await expect(detail).not.toContainText('0 captured suites'); await expect(detail).not.toContainText('Recorded run status:'); await expect(detail).toContainText('Example approval pending.');
+  await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
