@@ -1,5 +1,5 @@
 import { runnerHealth } from '../runtime/runner';
-import { modelPolicy } from '../ai/policy';
+import { modelPolicy, providerAvailable } from '../ai/policy';
 import { billingConfigured } from '../billing/config';
 import { voiceAvailability } from '../voice/config';
 import { telemetryConfig } from './telemetry';
@@ -16,9 +16,9 @@ export function authMode(): 'local' | 'supabase' | 'unconfigured' {
 }
 
 export function capabilities() {
-  let modelConfigured = true;
-  try { modelPolicy(); } catch { modelConfigured = false; }
-  const ai = enabled('FEATURE_AI_INTERVIEW', true) && Boolean(process.env.OPENAI_API_KEY) && modelConfigured;
+  let modelConfigured = false;
+  try { modelConfigured = providerAvailable(modelPolicy().provider); } catch { /* Invalid configuration keeps model inference unavailable. */ }
+  const ai = enabled('FEATURE_AI_INTERVIEW', true) && modelConfigured;
   const reportGeneration = enabled('FEATURE_REPORT_GENERATION', process.env.NODE_ENV !== 'production');
   const coaching = ai && reportGeneration;
   const runnerMode = process.env.RUNNER_MODE || 'docker';

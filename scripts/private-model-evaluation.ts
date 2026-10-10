@@ -35,7 +35,7 @@ async function main() {
   const roles = string('--roles')?.split(',') as EvaluationRole[] | undefined;
   if (!flags.has('--record')) {
     if (['--acknowledge-paid-api', '--max-usd', '--operator', '--holdout-unlock'].some(flag => flags.has(flag))) throw new Error('Paid or custodian acknowledgment needs explicit recording.');
-    const plan = createPrivateRolePlan(context, roles), summary = { mode: 'plan-only', providerCalls: 0, corpus: plan.corpus.corpus, corpusDigest: plan.corpusDigest, planDigest: plan.planDigest, roles: [...new Set(plan.planned.map(row => row.role))], plannedCalls: plan.planned.length, estimatedUpperUsd: plan.estimatedUpperUsd, quality: 'pending-independent-human-review', qualification: 'not-established' };
+    const plan = createPrivateRolePlan(context, roles), summary = { mode: 'plan-only', providerCalls: 0, provider: plan.policy.provider, model: plan.policy.model, corpus: plan.corpus.corpus, corpusDigest: plan.corpusDigest, planDigest: plan.planDigest, roles: [...new Set(plan.planned.map(row => row.role))], plannedCalls: plan.planned.length, estimatedUpperUsd: plan.estimatedUpperUsd, quality: 'pending-independent-human-review', qualification: 'not-established' };
     if (string('--output')) { await createPrivateJson(string('--output')!, summary); console.log('Private zero-call plan saved.'); } else console.log(JSON.stringify(summary, null, 2)); return;
   }
   if (process.env.FOUNDRY_PRIVATE_MODEL_RECORD !== '1' || !flags.has('--acknowledge-paid-api') || !string('--output') || !string('--operator') || !string('--max-usd')) throw new Error('Explicit private paid gates are missing.');
@@ -45,7 +45,7 @@ async function main() {
   try {
     const run = await recordPrivateRoleRun(context, { enabled: true, acknowledgePaidApi: true, operatorId: string('--operator')!, maxUsd: Number(string('--max-usd')), roles, holdoutUnlock, signal: controller.signal, persist });
     await createPrivateJson(join(directory, 'run.json'), run);
-    console.log(JSON.stringify({ state: run.state, attempted: run.entries.length, validated: run.entries.filter(entry => entry.state === 'validated').length, stopReason: run.stopReason, quality: 'pending-independent-human-review', qualification: 'not-established' }));
+    console.log(JSON.stringify({ provider: run.policy.provider, model: run.policy.model, state: run.state, attempted: run.entries.length, validated: run.entries.filter(entry => entry.state === 'validated').length, stopReason: run.stopReason, quality: 'pending-independent-human-review', qualification: 'not-established' }));
     if (run.state !== 'completed' || run.entries.some(entry => entry.state !== 'validated')) process.exitCode = 1;
   } finally { process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort); }
 }

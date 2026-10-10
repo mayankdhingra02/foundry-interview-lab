@@ -1,6 +1,6 @@
-import { completeFixtureJob } from './inference-fixtures';
+import { completeFixtureJob, fixtureInference } from './inference-fixtures';
 import { fixtureRuntimeId } from './runtime-fixtures';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -11,6 +11,7 @@ import { SessionService } from '../lib/server/session-service';
 import type { CoachOutput, LedgerEntry, Scenario } from '../lib/interview-practice/types';
 import { inferenceBindingFromPolicy, parseInferenceBinding } from '../lib/ai/binding';
 import { digest } from '../lib/interview-practice/domain';
+import type { ModelProvider } from '../lib/ai/policy';
 
 // Explicit opt-in: never uses DATABASE_URL or any hosted account. No existing database/container is modified.
 const enabled = process.env.RUN_POSTGRES_INTEGRATION === '1';
@@ -26,6 +27,16 @@ const ownerA = '73efbd73-729b-4b58-80ab-8c67240ef3db';
 const ownerB = '51c77415-21f8-4305-b165-c29eb5d3c829';
 const req = () => randomUUID();
 const mut = (revision: number) => ({ requestId: req(), expectedRevision: revision });
+// Configuration/usage fixtures only: neither provider is contacted by these SQL cases.
+function configureSyntheticProvider(provider: ModelProvider) {
+  vi.stubEnv('AI_PROVIDER', provider);
+  vi.stubEnv('OPENAI_MODEL', 'gpt-5.4-mini');
+  vi.stubEnv('OPENAI_INPUT_USD_PER_MILLION', '.75'); vi.stubEnv('OPENAI_OUTPUT_USD_PER_MILLION', '4.5');
+  vi.stubEnv('ANTHROPIC_MODEL', 'synthetic-anthropic-admitted-model');
+  vi.stubEnv('ANTHROPIC_INPUT_USD_PER_MILLION', '3'); vi.stubEnv('ANTHROPIC_OUTPUT_USD_PER_MILLION', '15');
+  vi.stubEnv('AI_MAX_OUTPUT_TOKENS', '2400');
+  vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Provider calls are forbidden in SQL provenance fixtures.'); }));
+}
 describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docker database', () => {
   let pool: Pool, servicePool: Pool, store: PostgresPracticeStore, service: SessionService;
   let container = '';
@@ -48,6 +59,7 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     await servicePool?.end(); await pool?.end();
     if (container) execFileSync('docker', ['rm', '-f', container], { stdio: 'pipe' });
   });
+  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
   beforeEach(async () => {
     await pool.query('truncate public.ai_practice_sessions cascade; truncate public.ai_practice_requests,public.ai_practice_usage_ledger,public.ai_practice_deletions; delete from auth.users');
     await pool.query('insert into auth.users(id) values ($1),($2)', [ownerA, ownerB]);
@@ -103,11 +115,14 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     await expect(completeFixtureJob(second, claim,{ kind: 'run',run: { ...run,runtimeDigest: fixtureRuntimeId } })).resolves.toBe(true);
     expect((await service.getSession(ownerA,session.id)).runs[0].runtimeDigest).toBe(fixtureRuntimeId);
   });
-  it('roundtrips immutable admitted inference and provenance across adapters without adopting new configuration', async () => {
+  it.each(['openai-responses', 'anthropic-messages'] as const)('roundtrips immutable admitted %s inference and provenance across adapters without adopting new configuration', async provider => {
+    configureSyntheticProvider(provider);
     const session = await create(), request = { ...mut(session.revision), mode: 'ask' as const, message: 'Synthetic bounded assistance.' };
     const admitted = await service.requestAssistant(ownerA, session.id, request), original = await service.exportSession(ownerA, session.id);
-    const binding = parseInferenceBinding(original.jobs[0].input.inferenceBinding)!; expect(binding).not.toBeNull(); expect(original.jobs[0].reservedUsd).toBe(binding.reserveUsd);
-    const second = new SessionService(new PostgresPracticeStore(servicePool), () => fixture, { inferenceBinding: role => inferenceBindingFromPolicy(role, { model: 'replacement-synthetic-model', inputRate: 10, outputRate: 20, maxOutput: 3200 }) });
+    const binding = parseInferenceBinding(original.jobs[0].input.inferenceBinding)!; expect(binding).not.toBeNull(); expect(binding.provider).toBe(provider); expect(original.jobs[0].reservedUsd).toBe(binding.reserveUsd);
+    const replacementProvider = provider === 'anthropic-messages' ? 'openai-responses' : 'anthropic-messages';
+    vi.stubEnv('AI_PROVIDER', replacementProvider);
+    const second = new SessionService(new PostgresPracticeStore(servicePool), () => fixture, { inferenceBinding: role => inferenceBindingFromPolicy(role, { provider: replacementProvider, model: 'replacement-synthetic-model', inputRate: 10, outputRate: 20, maxOutput: 3200 }) });
     expect(await second.requestAssistant(ownerA, session.id, request)).toEqual(admitted);
     expect((await second.exportSession(ownerA, session.id)).jobs[0].input).toEqual(original.jobs[0].input);
     await expect(store.transaction(db => {
@@ -119,6 +134,48 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     const saved = await service.exportSession(ownerA, session.id), record = saved.jobs[0].inference;
     expect(record).toMatchObject({ provider: binding.provider, requestedModel: binding.model, role: binding.role, promptVersion: binding.promptVersion, schemaVersion: binding.schemaVersion, contextVersion: binding.contextVersion, validated: true });
     expect((await service.getSession(ownerA, session.id)).jobs[0]).not.toHaveProperty('input');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('persists admitted Anthropic provider and ordinary usage through service restarts and a same-generation retry after ambient policy drift', async () => {
+    configureSyntheticProvider('anthropic-messages');
+    let session = await create();
+    const finished = await service.command(ownerA, session.id, { ...mut(session.revision), action: 'finish' });
+    await service.cancelJob(ownerA, finished.job!.id, { requestId: req() });
+    session = await service.getSession(ownerA, session.id);
+    await service.command(ownerA, session.id, { ...mut(session.revision), action: 'submit' });
+    const firstService = new SessionService(new PostgresPracticeStore(servicePool), () => fixture);
+    const first = (await firstService.claimJob('synthetic-anthropic-first-worker'))!;
+    const binding = parseInferenceBinding(first.job.input.inferenceBinding, 'coach')!;
+    expect(binding).toMatchObject({ provider: 'anthropic-messages', model: 'synthetic-anthropic-admitted-model', inputRate: 3, outputRate: 15 });
+    const knownCost = (100 * binding.inputRate + 40 * binding.outputRate) / 1_000_000;
+    const firstInference = { ...fixtureInference(first), inputTokens: 100, outputTokens: 40, usd: knownCost, validated: false, providerRequestId: 'synthetic-anthropic-first-call' };
+    await firstService.failJob(first, 'Synthetic known-usage invalid output.', knownCost, firstInference);
+
+    vi.stubEnv('AI_PROVIDER', 'openai-responses'); vi.stubEnv('OPENAI_MODEL', 'replacement-ambient-model');
+    vi.stubEnv('ANTHROPIC_MODEL', 'replacement-ambient-anthropic-model');
+    vi.stubEnv('ANTHROPIC_INPUT_USD_PER_MILLION', 'invalid'); vi.stubEnv('ANTHROPIC_OUTPUT_USD_PER_MILLION', '99');
+    vi.stubEnv('AI_MAX_OUTPUT_TOKENS', 'invalid');
+    const retryService = new SessionService(new PostgresPracticeStore(servicePool), () => fixture);
+    expect((await retryService.exportSession(ownerA, session.id)).jobs.at(-1)!.inference).toEqual(firstInference);
+    const retry = await retryService.retryReport(ownerA, session.id, { requestId: req() });
+    expect(retry.job!.id).toBe(first.job.id);
+    const second = (await new SessionService(new PostgresPracticeStore(servicePool), () => fixture).claimJob('synthetic-anthropic-retry-worker'))!;
+    expect(second.job.input).toEqual(first.job.input); expect(second.job.reservedUsd).toBe(first.job.reservedUsd);
+    expect(second.job.reservationSequence).toBe(2); expect(second.job.inference).toBeUndefined();
+    expect(second.job.attemptObservations).toEqual([{ attempt: 1, reservationSequence: 1, observedAt: expect.any(String), outcome: 'settled', actualUsd: knownCost, inference: firstInference }]);
+    const secondInference = { ...fixtureInference(second), inputTokens: 100, outputTokens: 40, usd: knownCost, providerRequestId: 'synthetic-anthropic-retry-call' };
+    const report: CoachOutput = { overview: 'Synthetic fixture: no explanation was recorded.', rubric: [{ criterionId: 'correctness', level: 'Not observed', feedback: 'An explanation was not recorded.', evidenceIds: [], confidence: 'low' }], nextPractice: [{ drillId: 'sum-drill', reason: 'Try a concrete example.' }] };
+    expect(await retryService.completeJob(second, { kind: 'coach', report, model: secondInference.returnedModel, promptVersion: binding.promptVersion, inference: secondInference, actualUsd: knownCost })).toBe(true);
+    const persisted = await new SessionService(new PostgresPracticeStore(servicePool), () => fixture).exportSession(ownerA, session.id), job = persisted.jobs.at(-1)!;
+    expect(job.inference).toEqual(secondInference); expect(job.attemptObservations?.[0].inference).toEqual(firstInference);
+    expect(job.input).toEqual(first.job.input); expect(job.actualUsd).toBe(knownCost);
+    expect(persisted.reports[0].generationId).toBe(first.job.input.generationId);
+    expect(persisted.usage).toMatchObject({ reservedUsd: 0, uncertainUsd: 0 }); expect(persisted.usage.spentUsd).toBeCloseTo(knownCost * 2);
+    const persistedJob = (await servicePool.query('select runtime_payload from public.ai_practice_jobs where id=$1', [first.job.id])).rows[0].runtime_payload;
+    expect(persistedJob.inference.provider).toBe('anthropic-messages'); expect(persistedJob.attemptObservations[0].inference.provider).toBe('anthropic-messages');
+    const postings = (await servicePool.query('select operation_id,amount_usd from public.ai_practice_usage_ledger where operation_id like $1 order by operation_id', [`${first.job.id}:%`])).rows;
+    expect(postings).toHaveLength(4); expect(postings.reduce((sum, row) => sum + Number(row.amount_usd), 0)).toBeCloseTo(knownCost * 2);
+    expect(fetch).not.toHaveBeenCalled();
   });
   it('fails closed on real per-table capacity overflow without truncating acknowledged evidence', async () => {
     const session = await create();
