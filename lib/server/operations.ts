@@ -4,7 +4,8 @@ import { promisify } from 'node:util';
 import { Pool } from 'pg';
 import { runnerHealth } from '../runtime/runner';
 import { configuredRuntimeBinding, DEFAULT_SCENARIO_IMAGE } from '../runtime/binding';
-import { authMode } from './config';
+import { authMode, enabled } from './config';
+import { readinessSchemaQuery, readinessTableNames, schemaCapabilitiesReady, type ReadinessFeatures, type SchemaCapability } from './readiness-schema';
 
 type Query = Pick<Pool, 'query'>;
 const exec = promisify(execFile);
@@ -39,15 +40,15 @@ export async function blockExecutionAdmission(): Promise<void> {
 }
 
 /** Public-safe readiness: no URLs, credential state, IDs, queue details, or exception bodies. */
-export async function probeReadiness(db: Query | null, options: { executionRequired?: boolean; configurationReady?: boolean; now?: () => Date } = {}): Promise<Readiness> {
+export async function probeReadiness(db: Query | null, options: { executionRequired?: boolean; configurationReady?: boolean; requiredFeatures?: ReadinessFeatures; now?: () => Date } = {}): Promise<Readiness> {
   const checkedAt = (options.now?.() ?? new Date()).toISOString();
   const checks: Readiness['checks'] = { configuration: options.configurationReady === false ? 'unconfigured' : 'ok', storage: db ? 'unavailable' : 'unconfigured', schema: 'not_checked', worker: 'not_checked', execution: options.executionRequired === false ? 'disabled' : 'not_checked' };
   const result = () => ({ status: Object.values(checks).every(value => ['ok', 'disabled'].includes(value)) ? 'ready' as const : 'not_ready' as const, service: 'foundry-interview-lab' as const, checks, checkedAt });
   if (!db) return result();
   try {
     await db.query('select 1'); checks.storage = 'ok';
-    const schema = await db.query<{ ready: boolean }>("select to_regclass('public.ai_practice_sessions') is not null and to_regclass('public.ai_practice_snapshots') is not null and to_regclass('public.ai_practice_jobs') is not null and to_regclass('public.practice_worker_heartbeats') is not null and to_regclass('public.practice_operations_state') is not null as ready");
-    checks.schema = schema.rows[0]?.ready ? 'ok' : 'missing';
+    const schema = await db.query<SchemaCapability>(readinessSchemaQuery, [readinessTableNames]);
+    checks.schema = schemaCapabilitiesReady(schema.rows, options.requiredFeatures) ? 'ok' : 'missing';
     if (checks.schema !== 'ok') return result();
     const workers = await db.query<{ fresh: boolean; runner_ready: boolean }>("select coalesce(bool_or(not stopping and last_seen_at >= now() - interval '90 seconds'),false) as fresh,coalesce(bool_or(not stopping and runner_ready and last_seen_at >= now() - interval '90 seconds'),false) as runner_ready from public.practice_worker_heartbeats");
     checks.worker = workers.rows[0]?.fresh ? 'ok' : 'stale';
@@ -63,7 +64,7 @@ export async function readiness(): Promise<Readiness> {
   if (authMode() === 'local' && (process.env.SESSION_SECRET?.length ?? 0) < 32) configurationReady = false;
   try { new URL(process.env.APP_URL || (process.env.NODE_ENV !== 'production' ? 'http://127.0.0.1:3000' : '')); }
   catch { configurationReady = false; }
-  return probeReadiness(pool(), { executionRequired: executionEnabled(), configurationReady });
+  return probeReadiness(pool(), { executionRequired: executionEnabled(), configurationReady, requiredFeatures: { voice: enabled('FEATURE_VOICE'), billing: enabled('FEATURE_BILLING'), reviews: Boolean(process.env.ADMIN_USER_IDS?.trim()) } });
 }
 
 /** Restricted operational counters. Never expose this response as learner-facing health. */
