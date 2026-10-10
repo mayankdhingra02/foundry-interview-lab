@@ -32,10 +32,10 @@ export type QualityMetric = { numerator: number; denominator: number; value: num
 const metric = (): QualityMetric => ({ numerator: 0, denominator: 0, value: null });
 const metricKeys = ['claimSupport', 'rubricWithinOneBand', 'relevance', 'policyCompliance', 'usefulness', 'requestCompliance', 'correctness'] as const;
 type MetricKey = typeof metricKeys[number];
-type RoleMetrics = Record<MetricKey, QualityMetric> & { unobservedRubricPairs: number; unsupportedObservedRatings: number };
-type Coverage = { planned: number; attempted: number; validated: number; adjudicated: number; reviewed: number; pending: number; rejectedOrIncomplete: number };
-const emptyCoverage = (): Coverage => ({ planned: 0, attempted: 0, validated: 0, adjudicated: 0, reviewed: 0, pending: 0, rejectedOrIncomplete: 0 });
-const emptyMetrics = (): RoleMetrics => ({ ...Object.fromEntries(metricKeys.map(key => [key, metric()])) as Record<MetricKey, QualityMetric>, unobservedRubricPairs: 0, unsupportedObservedRatings: 0 });
+export type RoleMetrics = Record<MetricKey, QualityMetric> & { unobservedRubricPairs: number; unsupportedObservedRatings: number };
+export type Coverage = { planned: number; attempted: number; validated: number; adjudicated: number; reviewed: number; pending: number; rejectedOrIncomplete: number };
+export const emptyCoverage = (): Coverage => ({ planned: 0, attempted: 0, validated: 0, adjudicated: 0, reviewed: 0, pending: 0, rejectedOrIncomplete: 0 });
+export const emptyMetrics = (): RoleMetrics => ({ ...Object.fromEntries(metricKeys.map(key => [key, metric()])) as Record<MetricKey, QualityMetric>, unobservedRubricPairs: 0, unsupportedObservedRatings: 0 });
 const key = (row: { caseId: string; role: string }) => JSON.stringify([row.caseId, row.role]);
 const normalized = (id: string) => id.trim().toLowerCase();
 export const roleCandidateDigest = (entry: RoleRun['entries'][number]) => digest(entry);
@@ -81,7 +81,7 @@ export function roleAnnotationTemplate(value: unknown, context: RoleReviewContex
   return { version: 1, provenance: 'human-review-required', corpus: 'development-regression', runId: run.runId, runDigest: digest(run), benchmarkVersion: run.benchmarkVersion, benchmarkDigest: run.benchmarkDigest, promptVersion: run.promptVersion, cases: run.entries.filter(entry => entry.state === 'validated').map(entry => ({ ...binding(run, entry), reviews: [], adjudication: null })) };
 }
 
-function assessmentPending(labels: RoleAssessment, role: EvaluationRole, attempt: BenchmarkAttempt): string[] {
+export function assessmentPending(labels: RoleAssessment, role: EvaluationRole, attempt: Pick<BenchmarkAttempt, 'scenario'>): string[] {
   const expectedKind = role.startsWith('assistant-') ? 'assistant' : role;
   if (labels.kind !== expectedKind || (labels.kind === 'assistant' && `assistant-${labels.mode}` !== role)) throw new Error('Review labels belong to another role or assistant mode.');
   const claimIds = labels.claims.map(row => row.id);
@@ -102,8 +102,8 @@ function assessmentPending(labels: RoleAssessment, role: EvaluationRole, attempt
   }
   return reasons;
 }
-const critical = (labels: RoleAssessment) => ({ fabricatedExecution: labels.fabricatedExecution === true || labels.claims.some(row => row.fabricatedExecution), criticalSolutionLeak: labels.criticalSolutionLeak === true || labels.claims.some(row => row.criticalSolutionLeak) });
-function labelDifferences(a: RoleAssessment, b: RoleAssessment) {
+export const critical = (labels: RoleAssessment) => ({ fabricatedExecution: labels.fabricatedExecution === true || labels.claims.some(row => row.fabricatedExecution), criticalSolutionLeak: labels.criticalSolutionLeak === true || labels.claims.some(row => row.criticalSolutionLeak) });
+export function labelDifferences(a: RoleAssessment, b: RoleAssessment) {
   let count = 0;
   for (const field of ['claimAuditComplete', 'noSubstantiveClaims', 'fabricatedExecution', 'criticalSolutionLeak'] as const) if (a[field] !== b[field]) count++;
   const claims = [...new Set([...a.claims, ...b.claims].map(row => row.id))];
@@ -114,7 +114,7 @@ function labelDifferences(a: RoleAssessment, b: RoleAssessment) {
   return count;
 }
 function addMetric(target: QualityMetric, supported: boolean) { target.denominator++; if (supported) target.numerator++; target.value = target.numerator / target.denominator; }
-function scoreLabels(metrics: RoleMetrics, labels: RoleAssessment, entry: RoleRun['entries'][number]) {
+export function scoreLabels(metrics: RoleMetrics, labels: RoleAssessment, entry: RoleRun['entries'][number]) {
   for (const claim of labels.claims) if (claim.support !== 'not-observed') addMetric(metrics.claimSupport, claim.support === 'supported');
   if (labels.kind === 'coach' && entry.output?.kind === 'coach') {
     const band: Partial<Record<RubricLevel, number>> = { 'Needs work': 0, Developing: 1, Strong: 2 };
