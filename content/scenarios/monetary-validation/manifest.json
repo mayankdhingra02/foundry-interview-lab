@@ -1,0 +1,175 @@
+{
+  "id": "monetary-validation",
+  "version": "1.0.0",
+  "title": "A quote that loses a cent",
+  "summary": "Fix integer monetary calculations and validate an invoice quote without changing its API.",
+  "durationMinutes": 40,
+  "level": "Intermediate",
+  "tags": [
+    "Debugging",
+    "Integer arithmetic",
+    "Validation",
+    "Boundary testing"
+  ],
+  "language": "python",
+  "starterFiles": [
+    "README.md",
+    "models.py",
+    "quote.py"
+  ],
+  "referenceFiles": [
+    "README.md",
+    "models.py",
+    "quote.py"
+  ],
+  "stages": [
+    {
+      "id": "understand",
+      "title": "Understand the contract",
+      "brief": "Fix integer monetary calculations and validate an invoice quote without changing its API. Preserve the documented public interface. Use only Python 3.11 standard-library modules.",
+      "requirements": [
+        "Keep quote_total(lines, discount_bps=0, shipping_cents=0) and return an integer number of cents.",
+        "Each LineItem has an integer unit_cents >= 0 and integer quantity >= 1; booleans, floats, and strings are invalid.",
+        "discount_bps must be an integer from 0 through 10000; shipping_cents must be an integer >= 0. Booleans are invalid.",
+        "Compute the subtotal, apply the discount once at invoice level, round half up to cents, then add undiscounted shipping. Avoid floating-point arithmetic.",
+        "Empty inputs are valid and return shipping; accept a one-pass iterable without mutating its items. Raise ValueError for invalid values."
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Implement the change",
+      "brief": "Make the smallest coherent change that satisfies the disclosed contract.",
+      "requirements": [
+        "Preserve public interfaces and existing valid behavior.",
+        "Explain any deliberate trade-off."
+      ]
+    },
+    {
+      "id": "verify",
+      "title": "Verify the behavior",
+      "brief": "Run checks and inspect failures before finishing.",
+      "requirements": [
+        "Run public checks and add a targeted boundary or regression check.",
+        "Identify behavior that your tests do not establish."
+      ]
+    },
+    {
+      "id": "debrief",
+      "title": "Defend your decisions",
+      "brief": "Explain the submitted code and its remaining limits.",
+      "requirements": [
+        "Use concrete code or test evidence.",
+        "Describe one alternative and its trade-off."
+      ]
+    }
+  ],
+  "rubric": [
+    {
+      "id": "money-correctness",
+      "name": "Exact monetary behavior",
+      "description": "Use the stated integer and rounding contract.",
+      "anchors": {
+        "strong": "Uses integer arithmetic and rounds the invoice subtotal once, including half-cent boundaries and large amounts.",
+        "developing": "Normal totals work, but rounding or large-value behavior has gaps.",
+        "needsWork": "Uses float arithmetic or an incorrect rounding level and cannot explain the resulting cent error."
+      }
+    },
+    {
+      "id": "money-validation",
+      "name": "Validation boundaries",
+      "description": "Reject invalid values before computing a quote.",
+      "anchors": {
+        "strong": "Checks exact integer types, bounds, and all iterable items; raises the documented error.",
+        "developing": "Validates common negative values but misses booleans or parameter boundaries.",
+        "needsWork": "Accepts invalid amounts/quantities or returns misleading totals."
+      }
+    },
+    {
+      "id": "money-verification",
+      "name": "Verification and reasoning",
+      "description": "Support behavior with focused checks and explain limits.",
+      "anchors": {
+        "strong": "Tests boundary cases and explains why ordinary totals alone cannot catch rounding errors.",
+        "developing": "Runs happy-path checks but leaves a known boundary unverified.",
+        "needsWork": "Treats a successful ordinary example as proof of all monetary behavior."
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "monetary-validation-probe-1",
+      "stageId": "debrief",
+      "competencyId": "money-correctness",
+      "question": "Which input makes the old quote lose a cent, and what does your implementation do differently?"
+    },
+    {
+      "id": "monetary-validation-probe-2",
+      "stageId": "debrief",
+      "competencyId": "money-validation",
+      "question": "How do you distinguish a valid integer amount from True in Python?"
+    },
+    {
+      "id": "monetary-validation-probe-3",
+      "stageId": "debrief",
+      "competencyId": "money-verification",
+      "question": "What would change if the discount had to be rounded for each line rather than for the invoice?"
+    }
+  ],
+  "hints": [
+    "Trace the existing calculation for a one-cent subtotal with a 50 percent discount.",
+    "Python round uses ties-to-even, and bool is a subclass of int. Compare those facts with the disclosed contract.",
+    "Use basis-point integer arithmetic: round a nonnegative numerator divided by 10000 by adding 5000 before integer division. Validate each field using an exact integer-type check."
+  ],
+  "tests": [
+    {
+      "id": "monetary-validation-public",
+      "title": "Public contract checks",
+      "file": "tests/test_public.py",
+      "visible": true,
+      "timeoutSeconds": 12
+    },
+    {
+      "id": "monetary-validation-protected",
+      "title": "Protected contract and edge checks",
+      "file": "tests/test_protected.py",
+      "visible": false,
+      "timeoutSeconds": 20
+    }
+  ],
+  "drills": [
+    {
+      "id": "monetary-validation-drill",
+      "title": "Round once and prove it",
+      "competencyId": "money-correctness",
+      "lesson": "Exact integer arithmetic and contract boundaries",
+      "exercise": "Write a small pure function that discounts 3 cents by 50 percent and explain the result. Add checks distinguishing invoice-level from line-level rounding."
+    },
+    {
+      "id": "monetary-validation-drill-2",
+      "title": "Reject integer lookalikes",
+      "competencyId": "money-validation",
+      "lesson": "Python validation at API boundaries",
+      "exercise": "Write a validator for nonnegative integer cents. Test True, False, 1.0, \"1\", None, zero, and a valid large integer; explain why exact type semantics matter."
+    },
+    {
+      "id": "monetary-validation-drill-3",
+      "title": "Choose a discriminating money test",
+      "competencyId": "money-verification",
+      "lesson": "Boundary checks and test evidence",
+      "exercise": "Write three quote checks that distinguish ties-to-even from half-up rounding, line rounding from invoice rounding, and float math from integer math. Explain what each passing check establishes."
+    }
+  ],
+  "rights": "Original Engineering Foundry preparation content; retained as proprietary project material. No claim of affiliation with an interview vendor.",
+  "runtime": {
+    "image": "python:3.11-slim",
+    "timeoutSeconds": 25,
+    "memoryMb": 256
+  },
+  "reviewStatus": {
+    "automatedReference": "passed on Python 3.10.13 and 3.11.12; pinned container qualification pending",
+    "expertReview": "pending",
+    "learnerPilot": "pending",
+    "starterDivergence": "confirmed intended contract failure"
+  },
+  "expectedStarterFailures": "The starter accepts invalid fields, uses floating point, and rounds half cents to even."
+}

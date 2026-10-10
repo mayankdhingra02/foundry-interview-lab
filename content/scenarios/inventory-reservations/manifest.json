@@ -1,0 +1,173 @@
+{
+  "id": "inventory-reservations",
+  "version": "1.0.0",
+  "title": "The last five units",
+  "summary": "Prevent overselling when independent workers reserve stock concurrently.",
+  "durationMinutes": 45,
+  "level": "Advanced",
+  "tags": [
+    "Concurrency",
+    "SQLite",
+    "Atomic updates",
+    "Invariants"
+  ],
+  "language": "python",
+  "starterFiles": [
+    "README.md",
+    "inventory.py"
+  ],
+  "referenceFiles": [
+    "README.md",
+    "inventory.py"
+  ],
+  "stages": [
+    {
+      "id": "understand",
+      "title": "Understand the contract",
+      "brief": "Prevent overselling when independent workers reserve stock concurrently. Preserve the documented public interface. Use only Python 3.11 standard-library modules.",
+      "requirements": [
+        "Preserve InventoryStore methods __init__, seed, available, reserve, and close. seed is an administrative fixture used before requests; it need not support concurrent reseeding.",
+        "reserve(sku, quantity) returns True exactly when stock was reduced by that quantity; otherwise returns False with no stock change for a missing SKU or insufficient stock.",
+        "Across independent SQLite connections to one database, total successful reserved quantity must never exceed seeded stock, and remaining stock must match the successful reservations.",
+        "Reject non-string/whitespace-only SKU and non-positive/non-integer quantity with ValueError before any change. Booleans are invalid quantities.",
+        "Use durable database coordination, not a process-local lock. The same database must retain remaining stock after reopening. Each worker owns its connection; do not share SQLite connections between threads."
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Implement the change",
+      "brief": "Make the smallest coherent change that satisfies the disclosed contract.",
+      "requirements": [
+        "Preserve public interfaces and existing valid behavior.",
+        "Explain any deliberate trade-off."
+      ]
+    },
+    {
+      "id": "verify",
+      "title": "Verify the behavior",
+      "brief": "Run checks and inspect failures before finishing.",
+      "requirements": [
+        "Run public checks and add a targeted boundary or regression check.",
+        "Identify behavior that your tests do not establish."
+      ]
+    },
+    {
+      "id": "debrief",
+      "title": "Defend your decisions",
+      "brief": "Explain the submitted code and its remaining limits.",
+      "requirements": [
+        "Use concrete code or test evidence.",
+        "Describe one alternative and its trade-off."
+      ]
+    }
+  ],
+  "rubric": [
+    {
+      "id": "stock-atomicity",
+      "name": "Atomic reservation",
+      "description": "Keep the read/check/write invariant under concurrency.",
+      "anchors": {
+        "strong": "Uses a transaction or conditional database operation that coordinates independent connections and explains the serialization point.",
+        "developing": "Sequential behavior works but atomicity is unverified or a race remains.",
+        "needsWork": "Uses check-then-write or only a local lock and assumes separate workers cannot oversell."
+      }
+    },
+    {
+      "id": "stock-consistency",
+      "name": "Consistency and failures",
+      "description": "Preserve stock and API behavior for all outcomes.",
+      "anchors": {
+        "strong": "Rejects invalid quantities, leaves unsuccessful requests unchanged, and preserves persisted counts.",
+        "developing": "Common success works but failure/type semantics have a gap.",
+        "needsWork": "Accepts negative reservations, loses updates, or returns success without the corresponding stock change."
+      }
+    },
+    {
+      "id": "stock-verification",
+      "name": "Concurrency evidence",
+      "description": "Test actual independent connections and acknowledge limits.",
+      "anchors": {
+        "strong": "Tests concurrent accepted counts against persisted stock and explains why one passing stress run alone is not a proof.",
+        "developing": "Runs threads but does not check the invariant or uses one shared connection.",
+        "needsWork": "Uses sequential tests as the only evidence of concurrent safety."
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "inventory-reservations-probe-1",
+      "stageId": "debrief",
+      "competencyId": "stock-atomicity",
+      "question": "Where is the operation that prevents two workers from both spending the last unit?"
+    },
+    {
+      "id": "inventory-reservations-probe-2",
+      "stageId": "debrief",
+      "competencyId": "stock-consistency",
+      "question": "What happens to stock and the return value on insufficient inventory or an invalid quantity?"
+    },
+    {
+      "id": "inventory-reservations-probe-3",
+      "stageId": "debrief",
+      "competencyId": "stock-verification",
+      "question": "What does your concurrency test establish, and what can a successful stress run still fail to prove?"
+    }
+  ],
+  "hints": [
+    "Write the invariant relating seeded stock, accepted quantities, and remaining stock. Then inspect where the current method reads and writes.",
+    "A separate connection can read the same old count before either worker writes. A Python lock does not coordinate another process.",
+    "A conditional UPDATE can decrement only where available >= quantity; its affected-row count tells you whether that atomic operation succeeded."
+  ],
+  "tests": [
+    {
+      "id": "inventory-reservations-public",
+      "title": "Public contract checks",
+      "file": "tests/test_public.py",
+      "visible": true,
+      "timeoutSeconds": 12
+    },
+    {
+      "id": "inventory-reservations-protected",
+      "title": "Protected contract and edge checks",
+      "file": "tests/test_protected.py",
+      "visible": false,
+      "timeoutSeconds": 20
+    }
+  ],
+  "drills": [
+    {
+      "id": "inventory-reservations-drill",
+      "title": "Identify a serialization point",
+      "competencyId": "stock-atomicity",
+      "lesson": "Atomic state changes and concurrent invariants",
+      "exercise": "For 5 units and 12 buyers, specify the allowed success count and final stock. Write a schedule that breaks read-then-write and an atomic alternative."
+    },
+    {
+      "id": "inventory-reservations-drill-2",
+      "title": "Account for every accepted unit",
+      "competencyId": "stock-consistency",
+      "lesson": "Consistency invariants and failure behavior",
+      "exercise": "Seed seven units, perform accepted and rejected reservations of different sizes, and verify seeded = accepted + remaining. Include negative, boolean, and missing-SKU requests."
+    },
+    {
+      "id": "inventory-reservations-drill-3",
+      "title": "Test independent connections",
+      "competencyId": "stock-verification",
+      "lesson": "Concurrent testing and the limits of stress tests",
+      "exercise": "Start multiple workers with separate database connections and a common start barrier. Check accepted quantity and final count together. Explain a stale-read schedule and why one passing run is not a proof."
+    }
+  ],
+  "rights": "Original Engineering Foundry preparation content; retained as proprietary project material. No claim of affiliation with an interview vendor.",
+  "runtime": {
+    "image": "python:3.11-slim",
+    "timeoutSeconds": 25,
+    "memoryMb": 256
+  },
+  "reviewStatus": {
+    "automatedReference": "passed on Python 3.10.13 and 3.11.12; pinned container qualification pending",
+    "expertReview": "pending",
+    "learnerPilot": "pending",
+    "starterDivergence": "confirmed intended contract failure"
+  },
+  "expectedStarterFailures": "The starter accepts negative quantities and performs a racy read followed by a write of the old count minus the request."
+}

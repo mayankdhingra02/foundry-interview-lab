@@ -1,0 +1,173 @@
+{
+  "id": "extension-compatibility",
+  "version": "1.0.0",
+  "title": "An export API with existing customers",
+  "summary": "Add JSONL export and filtering while preserving every documented CSV behavior.",
+  "durationMinutes": 40,
+  "level": "Intermediate",
+  "tags": [
+    "API evolution",
+    "Compatibility",
+    "Serialization",
+    "Regression testing"
+  ],
+  "language": "python",
+  "starterFiles": [
+    "README.md",
+    "exporter.py"
+  ],
+  "referenceFiles": [
+    "README.md",
+    "exporter.py"
+  ],
+  "stages": [
+    {
+      "id": "understand",
+      "title": "Understand the contract",
+      "brief": "Add JSONL export and filtering while preserving every documented CSV behavior. Preserve the documented public interface. Use only Python 3.11 standard-library modules.",
+      "requirements": [
+        "Preserve export_orders(orders, format=\"csv\", *, status=None). orders is a one-pass iterable of mappings with order_id, status, and integer amount_cents.",
+        "Default CSV must keep header order order_id,status,amount_cents, input row order, standard CSV quoting, LF row endings, and a trailing newline. Empty CSV contains its header.",
+        "Add format=\"jsonl\": one compact JSON object per selected row with exactly the three public fields, keys sorted lexically, ensure_ascii=True, and a trailing newline. Empty JSONL is an empty string.",
+        "If status is given, include rows with exactly that status in both formats; status=None includes all rows. Unknown statuses simply produce no rows.",
+        "Do not mutate inputs or consume the iterable twice. Reject an unsupported format with ValueError before iterating inputs."
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Implement the change",
+      "brief": "Make the smallest coherent change that satisfies the disclosed contract.",
+      "requirements": [
+        "Preserve public interfaces and existing valid behavior.",
+        "Explain any deliberate trade-off."
+      ]
+    },
+    {
+      "id": "verify",
+      "title": "Verify the behavior",
+      "brief": "Run checks and inspect failures before finishing.",
+      "requirements": [
+        "Run public checks and add a targeted boundary or regression check.",
+        "Identify behavior that your tests do not establish."
+      ]
+    },
+    {
+      "id": "debrief",
+      "title": "Defend your decisions",
+      "brief": "Explain the submitted code and its remaining limits.",
+      "requirements": [
+        "Use concrete code or test evidence.",
+        "Describe one alternative and its trade-off."
+      ]
+    }
+  ],
+  "rubric": [
+    {
+      "id": "export-compatibility",
+      "name": "Compatibility",
+      "description": "Preserve the existing CSV contract while extending behavior.",
+      "anchors": {
+        "strong": "Keeps signature, default format, headers, quoting, order, and empty-output behavior.",
+        "developing": "Adds the feature but a legacy edge case changes.",
+        "needsWork": "Replaces the old output or interface without accounting for existing clients."
+      }
+    },
+    {
+      "id": "export-extension",
+      "name": "Shared extension logic",
+      "description": "Implement filtering and JSONL consistently.",
+      "anchors": {
+        "strong": "Both formats apply the same exact filter and emit only the documented public fields.",
+        "developing": "Implements one format/filter path but misses the other or leaks extra fields.",
+        "needsWork": "Ignores requested filters or cannot produce the documented JSONL."
+      }
+    },
+    {
+      "id": "export-verification",
+      "name": "Regression evidence",
+      "description": "Test the old contract and new functionality.",
+      "anchors": {
+        "strong": "Uses one-pass inputs, escaping, empty outputs, and a format failure check as evidence.",
+        "developing": "Tests ordinary JSONL but little legacy behavior.",
+        "needsWork": "Assumes a new feature passing means backward compatibility is preserved."
+      }
+    }
+  ],
+  "probes": [
+    {
+      "id": "extension-compatibility-probe-1",
+      "stageId": "debrief",
+      "competencyId": "export-compatibility",
+      "question": "Which existing CSV behavior did you verify remained compatible?"
+    },
+    {
+      "id": "extension-compatibility-probe-2",
+      "stageId": "debrief",
+      "competencyId": "export-extension",
+      "question": "How do you ensure status filtering behaves identically for CSV and JSONL?"
+    },
+    {
+      "id": "extension-compatibility-probe-3",
+      "stageId": "debrief",
+      "competencyId": "export-verification",
+      "question": "What would break if a caller supplied a generator rather than a list?"
+    }
+  ],
+  "hints": [
+    "Identify which CSV byte-level details an existing client can observe before changing anything.",
+    "Filter a one-pass iterator once, then serialize the selected rows using the requested format.",
+    "Use csv.writer for CSV and json.dumps of an explicit three-field mapping for JSONL. Reject unknown formats before consuming the iterator."
+  ],
+  "tests": [
+    {
+      "id": "extension-compatibility-public",
+      "title": "Public contract checks",
+      "file": "tests/test_public.py",
+      "visible": true,
+      "timeoutSeconds": 12
+    },
+    {
+      "id": "extension-compatibility-protected",
+      "title": "Protected contract and edge checks",
+      "file": "tests/test_protected.py",
+      "visible": false,
+      "timeoutSeconds": 20
+    }
+  ],
+  "drills": [
+    {
+      "id": "extension-compatibility-drill",
+      "title": "Extend without changing a default",
+      "competencyId": "export-compatibility",
+      "lesson": "API compatibility and observable behavior",
+      "exercise": "Add an optional JSON response to a CSV endpoint. First write a byte-for-byte test for the original default response."
+    },
+    {
+      "id": "extension-compatibility-drill-2",
+      "title": "Share a filter across serializers",
+      "competencyId": "export-extension",
+      "lesson": "Serialization boundaries and public fields",
+      "exercise": "Given rows with an internal note and two statuses, implement one selection step reused by CSV and JSONL. Prove that the note cannot reach either format."
+    },
+    {
+      "id": "extension-compatibility-drill-3",
+      "title": "Protect a generator client",
+      "competencyId": "export-verification",
+      "lesson": "Regression design and single-pass iterables",
+      "exercise": "Create a one-use iterator that fails if traversed twice. Verify escaping, empty output, filtering, and early rejection of an unsupported format without consuming it."
+    }
+  ],
+  "rights": "Original Engineering Foundry preparation content; retained as proprietary project material. No claim of affiliation with an interview vendor.",
+  "runtime": {
+    "image": "python:3.11-slim",
+    "timeoutSeconds": 25,
+    "memoryMb": 256
+  },
+  "reviewStatus": {
+    "automatedReference": "passed on Python 3.10.13 and 3.11.12; pinned container qualification pending",
+    "expertReview": "pending",
+    "learnerPilot": "pending",
+    "starterDivergence": "confirmed intended contract failure"
+  },
+  "expectedStarterFailures": "The starter preserves ordinary CSV but ignores status and rejects JSONL."
+}
