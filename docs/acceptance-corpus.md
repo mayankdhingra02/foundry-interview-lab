@@ -54,6 +54,8 @@ This cannot detect every paraphrase, undisclosed source or previously exposed ar
 
 The checked-in development cases and their authored scenario assets are now public. Copying or relabeling them cannot create an unexposed holdout. Newly collected private attempts on public tasks may support attempt-level feedback evaluation, with their task exposure recorded; they do not establish unseen-task-family transfer or resistance to possible memorization. Public availability alone does not prove prior exposure by a particular learner or model. The current loader resolves supported published scenario versions, not arbitrary private task packages. Independent fresh-task-family evaluation needs separately reviewed material and a qualified evaluation path. Keep its actual attempts, outputs, annotations and custody evidence outside Git. See [the public-source boundary](ci.md#public-repository-and-actions-scope).
 
+The design also requires separating task variants used for development from acceptance and learning transfer. The loader's case/source/content overlap checks do not enforce variant separation. New private cases on a development variant alone cannot satisfy that requirement. The three level drafts are outside the fixed development recipes, but need independent calibration and actual custody/review evidence before use for acceptance. A qualified independent evaluation/pilot process can supply that evidence; a private-package loader is needed only if that process chooses to run confidential new packages through this harness.
+
 ## Import exact execution observations
 
 Capture files use `schemaVersion: 1`, `provenance: private-corpus-captures` and a bounded `captures` array. Each record requires:

@@ -52,6 +52,8 @@ The authored scenario references, protected check source and checked-in developm
 
 Two experienced reviewers must independently inspect a curated benchmark and adjudicate disagreements. A protected holdout must remain outside prompt development. Record actual model outputs and evaluate interviewer, assistant modes and coach separately. Synthetic review labels, model agreement and valid evidence IDs cannot substitute for human assessment.
 
+Preserve the design's separation of development task variants from acceptance and learning transfer. Private attempt data on a public development variant alone does not satisfy that separation, and case-overlap tooling does not enforce it. Reviewed non-development variants, custody and matched fresh-task evaluation remain acceptance work. The design permits a qualified independent evaluation/pilot process; it does not require confidential packages to be imported into the current product harness.
+
 Content approval, supported-browser/screen-reader review, public-host isolation review, provider invoice/data-handling checks and the 20–30-person learner pilot remain open. The pilot must distinguish technical failures from withdrawal, record assistance, and compare fresh-task performance at matched difficulty. Do not infer learning effectiveness, fairness or hiring outcomes from fixture scores.
 
 The deployment owner must choose hosting/region, verified identity, database, separate execution boundary, budgets, commercial terms, retention schedules, monitoring/alerts and rollback responsibility. Measured load, canary, restore and deletion exercises qualify that deployment. Repository code and a small localhost workload do not establish monthly availability, production capacity or RPO/RTO.
