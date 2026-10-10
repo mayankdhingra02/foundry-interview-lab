@@ -4,6 +4,8 @@ The application sends an acknowledged immutable workspace snapshot and server-se
 
 `executeScenario(scenario, files, { signal, includeProtected, runtimeBinding })` returns the shared `RunExecution` contract. Public checks run by default; the trusted worker selects protected checks for an admitted practice run. Observation IDs are the server's `Scenario.tests.id` values. The result records the inspected immutable local image ID, bounded stdout/stderr, process outcome, per-suite observations, and elapsed time. Callers must attach the admitted snapshot and suite digests to the persisted `TestRun`; the runner does not choose or mutate a session's snapshot.
 
+Newly constructed test evidence also binds the recorded runtime image ID into each hashed observation, alongside its snapshot and suite digests. A historical run without that ID is explicitly unknown (`runtimeDigest: null`); the current deployment image is never substituted. This changes only newly constructed evidence. Existing frozen manifests, report evidence, and generation digests are preserved as recorded, so old reports are not silently requalified or rewritten.
+
 ## Runtime controls
 
 - Server image allowlist, with `python:3.11-slim` as the default authored profile. Both the authored alias and `PYTHON_IMAGE` must be approved in comma-separated `RUNNER_ALLOWED_IMAGES`. An explicit reviewed `PYTHON_IMAGE_ID` is required locally and in production. The ID is frozen when the run is requested, inspected by exact ID, and used for execution. No implicit pull or later alias substitution occurs.
