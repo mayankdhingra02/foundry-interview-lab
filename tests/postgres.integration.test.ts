@@ -61,6 +61,17 @@ describe.skipIf(!enabled)('normalized PostgreSQL persistence in disposable Docke
     expect(metadata.rows[0].runtime_payload).not.toHaveProperty('snapshots');
     expect(metadata.rows[0].runtime_payload).not.toHaveProperty('files');
   });
+  it('measures reduced JSON row transport on the same SQL corpus without changing private evidence', async () => {
+    const session = await create();
+    await service.saveWorkspace(ownerA,session.id,{ ...mut(session.revision),files: { 'service.py': 'SYNTHETIC-CORPUS-CONTENT'.repeat(100) } });
+    const before = await store.read(), measurement = await store.measureLoadTransport();
+    expect(await store.read()).toEqual(before);
+    expect(measurement.entityRows).toBe(8); // 1 session,2 snapshots,2 events,2 request caches,1 admission.
+    expect(measurement.projectedRowJsonBytes).toBeLessThan(measurement.fullRowJsonBytes);
+    expect(measurement.projectedRowJsonBytes).toBeGreaterThan(0);
+    expect(Object.values(measurement).every(value => Number.isSafeInteger(value) && value >= 0)).toBe(true);
+    expect(JSON.stringify(measurement)).not.toContain('SYNTHETIC-CORPUS-CONTENT');
+  });
   it('serializes concurrent quota admission and stale-revision writes', async () => {
     const restricted = new SessionService(new PostgresPracticeStore(servicePool), () => fixture, { maxDailySessions: 1 });
     const created = await Promise.allSettled([restricted.createSession(ownerA, { scenarioId: fixture.id, requestId: req() }), restricted.createSession(ownerA, { scenarioId: fixture.id, requestId: req() })]);
