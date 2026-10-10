@@ -11,3 +11,7 @@ The adapter also previously preserved only `DomainError` after transaction rollb
 Five deterministic transport tests cover rollback and trusted error preservation, rejection of status-shaped impostors, and redaction of connection/SQL errors. A contract-parity test prevents the strict SQL vocabulary from silently diverging from the typed application schema. A new real-SQL case verifies unknown event/version rejection, while existing assistant-edit and correction-publication cases cover the supported new event types.
 
 No local Docker call was made for this repair. SQL behavior and the original three failures require a fresh GitHub CI execution after the fix is pushed. Static vocabulary parity and fake-transport tests do not establish that the migration or PostgreSQL workflows pass. Loader batching and UTC budget-window accounting are separate changes and are not part of this compatibility repair.
+
+## Subsequent SQL qualification
+
+[Run 37991414516](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37991414516), commit `9095136`, passed all 36 then-current PostgreSQL cases, including the repaired assistant proposal, concurrent correction publication and revoked-consent response. [Run 37995581500](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37995581500) subsequently passed 45 SQL cases after additive privacy/runtime hardening. The original failures remain recorded above; hosted Supabase qualification is separate.

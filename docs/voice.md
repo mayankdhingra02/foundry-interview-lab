@@ -106,3 +106,7 @@ All checked 2026-10-09. Paraphrases above are intentionally short.
 - D3: Deepgram data handling — https://developers.deepgram.com/trust-security/your-data
 - D4: Deepgram pricing — https://deepgram.com/pricing
 - D5: Deepgram MIP pricing update — https://developers.deepgram.com/changelog/2026/3/5
+
+## Subsequent disposable qualification
+
+[Run 37996251785](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37996251785), commit `43cdb3a`, passed all 47 PostgreSQL cases including persisted voice choice/default/legacy/stage guards. The full 74-browser-test suite passed with synthetic speech fixtures. Its load p95 missed at 1,118 ms and the separate evaluation-assets image build failed; those outcomes are preserved in [delivery status](delivery-status.md). These checks make no real speech-provider or hardware-quality claim. Later source fixes require fresh qualification after the account owner restores GitHub Actions availability.

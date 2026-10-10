@@ -1,37 +1,79 @@
 # Delivery status
 
-The target remains the full product and release requirements in [the design](design.md). Work is split into focused pull requests. A checked code path does not establish live-provider reliability, expert content approval, or learning effectiveness.
+The canonical requirements are in [the product and technical design](design.md). Foundry Interview Lab is implemented in focused, stacked pull requests in the [private repository](https://github.com/mayankdhingra02/foundry-interview-lab). The application is not publicly deployed. `main` remains the planning baseline until the PRs are reviewed and merged in dependency order. A passing code check does not establish feedback accuracy, approved content rights, public sandbox security, or learner benefit.
 
-## Implementation workstreams
+## Requirement coverage
 
-| Workstream | Required outcomes | Current state |
+Priorities below retain the design's meaning: P0 is adaptive alpha, P1 is hosted beta, and P2 is expansion after validation. “Implemented” describes code and its automated boundary checks, with external release evidence listed separately.
+
+| Requirement | Implementation and evidence boundary | Status |
 | --- | --- | --- |
-| Application foundation | Next runtime, typed tooling, private identity boundary, request validation, CI | In progress |
-| Session engine | Immutable scenarios and snapshots, independent stage/lifecycle, owner access, CAS, idempotency, evidence, jobs, fencing, spend reservation, recovery, deletion | In progress |
-| Authored content | Five distinct Python tasks, public/protected checks, reference solutions, rubric anchors, hints/probes, drills, provenance | Drafted; automated reference validation, expert approval pending |
-| AI orchestration | Separate interviewer/assistant/coach contexts, structured outputs, evidence/action validation, bounded repair/fallback, version and usage capture | Pending |
-| Execution | Snapshot runner, limits, cancellation and cleanup, no product credentials or public egress, tampering limitations | Pending |
-| Learner workspace | Catalog/setup, editor/diffs/tests, dialogue, safe edit acceptance, debrief/report, recovery and accessibility | In progress |
-| Durable hosted persistence | PostgreSQL adapter, normalized owner constraints, RLS tests, backup/restore and account lifecycle | Pending |
-| Accounts and commerce | Verified accounts, sign-in/out, private export/delete, webhook-verified entitlements, ledger and quotas | Pending |
-| Voice | Equipment check, transcript correction, playback interruption, disconnect recovery, text parity, qualified gateway | Pending |
-| Progression | Evidence counts, familiarity/help conditions, drills, fresh-task recommendations, provisional profiles | Pending |
-| Internal tools | Author preview, permissioned approved evaluation examples, failures/disputes, safe regeneration/support references | Pending |
-| Operations | Deployments, migrations, flags, health/traces, provider limits, incident runbooks, load and recovery checks | Pending |
-| Evaluation | Curated benchmark, adversarial cases, expert annotations, claim support and question relevance checks | Pending |
-| Expansion | System design, behavioral, second language, mentor/peer review, permissioned sharing and study plans | Pending |
+| P0 interview configuration | Versioned scenario, mode, role, level, skills, target duration, assistance policy and accommodations saved at admission. Exact new-attempt allowlists and rollout stages are server-enforced. | Implemented; configuration usability needs pilot review. |
+| P0 repository workspace | Allowlisted files, bounded editor, acknowledged saves, immutable snapshots, previews, test output and two submission checkpoints. Local unsaved drafts remain separate from saved evidence. | Implemented; browser recovery checks cover refresh/retries. |
+| P0 execution evidence | Durable run jobs, admitted snapshot/suite identity, constrained Docker execution, cancellation/cleanup hold, real observations and runtime provenance. Worker validates original package before external work. | Implemented and exercised in disposable CI; dedicated public execution deployment/security review remains required. |
+| P0 adaptive debrief | Bounded, rubric-constrained interviewer follows frozen code and recorded tests/answers. Working, repeat and clarification controls do not silently submit answers. Authored fallback remains visibly labeled. | Implemented; relevance/quality requires independent benchmark review. |
+| P0 distinct AI roles | Separate interviewer/assistant/coach contexts and strict structured outputs. Assistant proposals require approval, reject stale acceptance, and support safe undo with preserved acceptance history. Protected checks/reference source are excluded from model contexts. | Implemented; live model qualification remains required. |
+| P0 evidence-linked reports | Final submit freezes code, runs and finalized discussion; criterion findings cite that immutable manifest. Missing evidence stays “Not observed”; invalid/unavailable coaching is visibly unassessed. | Implemented; deterministic validation does not prove semantic truth. |
+| P1 practice/simulation | Practice permits authored hints and pause. Simulation preserves its selected assistance policy; timing is advisory and accommodations are not scored negatively. | Implemented; no unsupported timing/assessment claims. |
+| P1 history/recovery | Owner-only list, resume, event replay, frozen request identities, export/delete, CAS, transactional idempotency, worker leases/fences and safe report retry. | Implemented; recovery hardening is tracked by its focused PR and exact checks. |
+| P1 catalog | Five original Python repository tasks, reference solutions, visible/protected checks, rubric anchors, probes, hints, drills, provenance and version/retirement rules. | Implemented as draft content; expert/content-rights approval is required before publication to learners. |
+| P1 conditional voice | Consented press-to-talk recording, microphone support check, editable transcript, question playback interruption, text fallback, duration/USD admission, no application audio persistence. | Implemented behind configuration and qualification gates; speech account/browser validation remains open. Long-lived/full-duplex gateway is conditional expansion. |
+| P1 progression | Latest-report evidence counts, original observation dates, help/repeat provenance, observed gaps, criterion goals, drills and at most three next steps. Known Foundry lesson paths are explicit source references. | Implemented; actual cross-product lesson navigation requires the Foundry integration and transfer value needs a real pilot. |
+| P1 entitlements/cost | Verified Stripe webhook processing and period entitlements, transactional session debits, daily/monthly/global/session USD ceilings, run/AI/voice limits, bounded mutation/history/shared-job admission, conservative uncertain charges and UTC attribution. | Implemented; payment/account qualification and chosen commercial terms remain open. |
+| P1 internal review | Authored previews and a read-only synthetic evaluation library with explicit pending review/approval status; scoped, expiring learner inspection/action consent; audit trail; independent correction approval/publication against frozen evidence. | Implemented; operational staff roles and review procedures must be provisioned. |
+| P1 operations/support | Shared readiness and execution holds, worker heartbeats, count-only reconciliation, content-free diagnostics/support references, manual bounded retention, backup/restore qualification and incident/deployment runbooks. | Implemented; hosted backup/monitoring/retention and traffic qualification remain open. |
+| Evaluation program | Curated benchmark contracts, adversarial categories, independent annotation/adjudication workflow and release-gate checks. Synthetic fixtures are labeled. | Tooling implemented; human-qualified benchmark and pilot results do not yet exist. |
+| P2 study planning | Bounded recommendations from actual observations and learner-selected criteria. No percentile, hiring probability or mastery claim. | Initial deterministic planning implemented; effectiveness is unvalidated. |
+| P2 additional formats | System design artifacts, behavioral narrative coaching, additional runtimes, cohorts, mentor/peer review and expiring learner sharing. | Conditional future work after the core learning/release gates; not represented as implemented. |
 
-## External release evidence
+The five task packages are Monetary Validation, Extension Compatibility, Duplicate Invoice Incident, Inventory Reservations, and Event Rollup. The [content review](content-review.md) process defines the independent approval required for each version. This repository preserves the existing Engineering Foundry source rather than modifying its production checkout.
 
-These requirements cannot be satisfied by generating code or synthetic labels. They remain open until the described evidence is obtained.
+## Architecture and ownership
 
-- Two experienced reviewers independently annotate and adjudicate benchmark attempts.
-- The original scenarios receive technical/content rights approval and trial-session review.
-- A real learner pilot evaluates usefulness, completion, recovery, and performance on fresh tasks.
-- Live model, speech, sandbox, identity and payment access, region, retention and billing behavior are qualified for the deployment account.
-- Independent sandbox/security and keyboard/screen-reader reviews close critical findings.
-- Production backup restore, deletion cleanup, monitoring and traffic-envelope checks pass on the selected deployment.
+The Next application authenticates the owner, validates commands and admits durable work. A deterministic session service owns lifecycle, stage, files, immutable evidence, replay and budgets. A separate worker obtains fenced leases and performs external execution or inference outside transactions. PostgreSQL stores normalized private entities; local file storage is development-only. The current aggregate adapter serializes trusted writes and has explicit row/byte safety limits; it is a narrow-beta correctness adapter, not demonstrated large-scale storage.
 
-## Pull request policy
+Foundry owns original content, rubric/competency definitions, interview policy, evidence contracts, output validation, progression, evaluation acceptance and operational accountability. Providers supply inference, speech, hosted identity/database, isolated compute and commerce. No foundation-model, speech-model or proprietary scoring-model training is required or implemented for this release. Outsourced implementation/content work still needs a named Foundry reviewer and the same tests/content acceptance; outsourcing cannot supply independent learning evidence by assertion.
 
-Keep application foundation, domain engine, content, AI/execution, learner UI and integrations independently reviewable. Stacked PRs identify their dependency and base branch. Never claim the overall product complete from an individual PR's checks.
+See [AI](ai.md), [execution](execution.md), [worker input validation](worker-inputs.md), [persistence](persistence.md), [CPU diagnosis](persistence-cpu.md), [admission limits](admission.md), [browser recovery](browser-recovery.md), [undo](edit-undo.md), [runtime binding](runtime-binding.md), [capability-change replay](replay-admission.md), [evaluation library](evaluation-library.md), [billing](billing.md), [voice](voice.md), [support/review](review.md), [progression](progression.md), [rollout](rollout.md), [quotas](quotas.md), [retention](retention.md), [evaluation](evaluation.md), [CI](ci.md), and [deployment](../deploy/README.md) for implementation contracts and limitations.
+
+## Recorded verification
+
+Final implementation commit `dc16c27` passed TypeScript, ESLint, **501 default tests** and a production build. **61 opt-in Docker/PostgreSQL tests were skipped locally**. The filtered 194-source deployment-context build and compiled route/worker imports also passed; these do not execute Docker. Earlier voice commit `43cdb3a` passed the complete **74-browser-test** hosted suite and all **47 PostgreSQL tests**. Fresh final-source container/SQL/load/image qualification remains blocked by account billing as recorded below. Opt-in database/container cases are reported as skipped when not executed. Current shared-host Docker storage I/O errors prevent safe local container qualification; no shared Docker restart/prune is used as a workaround. The workflow uses fresh GitHub hosts for real integration gates when runner access is available.
+
+[CI run 37991414516](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37991414516), commit `9095136`, passed all four jobs: static/build checks, 26 runner tests with Docker enabled, 36 real PostgreSQL cases, the unchanged durability/load/restore gate, 31 browser tests, web/worker image builds and container startup. The ten-session/50-save synthetic workload measured p50 548 ms, p95 834 ms and max 858 ms; all nine recovery checks passed and disposable restore took 738 ms. This is a small synthetic localhost workload, not hosted capacity or production RPO/RTO.
+
+[Run 37991609209](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37991609209), commit `c69f7b3`, also passed all four jobs after UTC budget attribution changes.
+
+[Retention run 37992285344](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37992285344), commit `50af76a`, passed static/build, 26 runner tests with Docker enabled, all 39 PostgreSQL cases including three retention cases, 31 browser checks and deployment images/startup. Its unchanged operational p95 gate **failed at 1,385 ms against 1,000 ms**; all nine recovery checks passed and restore took 844 ms. This failed performance result is retained. Later changes require their own measurements; an older pass does not qualify a newer commit.
+
+[Runtime qualification run 37995581500](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37995581500), commit `ddeb9a6`, passed all four jobs with 30 runner tests (16 contracts plus 14 real Docker cases) and 45 real PostgreSQL cases. Its ten-session/50-save workload measured p50 546 ms, p95 818 ms and max 841 ms; all nine recovery checks passed and restore took 841 ms. Projected row JSON was 1,166,133 bytes versus 2,155,823 bytes for the same full-row corpus; this excludes protocol framing and is not a production latency claim. The preceding batching commit `204a05a` passed SQL but missed the p95 gate at 1,123 ms, so host/load variance remains visible and each final candidate needs its own qualification.
+
+[Voice run 37996251785](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37996251785) passed all 47 SQL cases, including the persisted voice/debrief guards, and 30 runner tests. Its load p95 missed at 1,118 ms; all nine recovery checks passed and restore took 827 ms. [Evaluation run 37996092873](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37996092873) exposed a separate deployment-image build failure because fixed runtime evaluation assets were excluded from the build context. These failures require substantive repair and fresh qualification rather than rerunning an unchanged commit.
+
+[Replay run 37996427210](https://github.com/mayankdhingra02/foundry-interview-lab/actions/runs/37996427210) assigned no runners and executed no steps. GitHub reported: “The job was not started because recent account payments have failed or your spending limit needs to be increased.” This is an account-level qualification block; it is neither an application test pass nor an executed failure. The subsequent source fixes preserve the unchanged target: the persistence comparison guard reduced local synthetic transaction CPU by 34.4% with identical SQL plans, and the deployment context admits only the five fixed evaluation dependencies. A filtered-source production build passed, including compiled route and worker imports without raw eval sources. Final source and image fixes therefore need a fresh hosted run after the account owner restores Actions availability. No billing setting was changed.
+
+Earlier evidence also includes a 1,149 ms load miss, three real PostgreSQL event/error failures subsequently repaired, and image-provisioning runs stopped by Docker Hub HTTP 429 before SQL qualification. [Persistence](persistence.md), [event compatibility](postgres-compatibility.md) and [CI](ci.md) retain their causes and repair boundaries. Do not conceal misses by weakening a threshold or repeatedly rerunning an unchanged commit until it passes.
+
+## External release checklist and responsible owner
+
+These items require real people, chosen accounts or target infrastructure. Generated code and synthetic results cannot complete them.
+
+| Gate | Owner/action | Required result |
+| --- | --- | --- |
+| Content publication | Technical interviewer/content owner reviews all five original scenario packages, solutions, known wrong approaches, rights and probe/rubric quality. | Recorded approval per immutable version; close critical content defects. |
+| Independent AI benchmark | Two experienced reviewers independently annotate the curated benchmark and adjudicate disagreements; run selected models/prompts against acceptance criteria. | Reviewed evidence-support/question-relevance results and subgroup/error analysis; no synthetic labels presented as human approval. |
+| Learner pilot | Product/learning owner recruits the intended cohort and runs real attempts, recovery cases and fresh-task transfer checks. | Measured usefulness, completion/recovery, cost, and evidence of improvement; revise content/controller where needed. |
+| GitHub Actions availability | Repository/account owner resolves the reported Billing & plans payment/spending restriction. | Fresh jobs are assigned runners; final implementation and merge candidate repeat the full workflow without weakening gates. |
+| Accounts and deployment | Infrastructure owner chooses region/host, configures Supabase identity/TLS/database and separate web/worker execution boundary, applies ordered migrations and closed rollout. | Private staging works with real verified accounts; no development identity or file fallback in production. |
+| Provider qualification | Account owner supplies server-side model/speech/payment credentials and approves region, retention/data controls, budgets and commercial terms. | Staging access, failure handling, invoices/meters, webhook verification and opt-out behavior measured before enabling each independent flag. |
+| Isolation and accessibility | Independent security reviewer tests sandbox/auth/data boundaries; accessibility reviewer checks keyboard and screen-reader journeys on supported browsers. | Critical findings closed; deployment-specific cancellation, cleanup and speech fallback demonstrated. |
+| Operations | On-call owner rehearses restore/deletion/retention, monitoring/alerts, credential rotation, queue interruption and provider outage using the chosen deployment. | Target traffic/corpus and RPO/RTO are measured, not inferred from small CI smoke tests. |
+| Release | Product and operational owners approve content, quality, cost and safety evidence, then enable staff → invite → limited-public admissions. | Explicit release decision, rollback/hold ownership and observed canary results. No public launch is performed by this repository task. |
+
+Build deliverables are reviewable in the PR stack. The release checklist is still open: no actual content approval, expert annotation, learner pilot, credential provisioning or deployment has been substituted with synthetic evidence.
+
+The detailed [design decisions](design.md#26-decisions-and-dependencies-still-open), [evaluation gates](evaluation.md), [rollout policy](rollout.md) and [operations runbook](operations.md) define the remaining evidence. The canonical design remains the planning baseline; this file records delivery and must not rewrite proposed thresholds as vendor guarantees.
+
+## Review and merge
+
+The [PR review guide](pr-stack.md) maps each focused change to its base. Each PR targets the previous implementation branch and identifies its dependency. Review and merge from the bottom of the stack upward, then rebase/update subsequent bases as needed and rerun required checks on the final merge candidate. Every PR is attached to the originating Codex chat. No PR is merged automatically. Do not deploy a top branch without reviewing its full inherited stack and applying its ordered migrations.
