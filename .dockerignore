@@ -19,7 +19,16 @@ playwright-report
 *.key
 *.tsbuildinfo
 docs
-evals
+# Only the fixed staff evaluation library's source dependencies enter the
+# builder. Future candidates, annotations, captures and subdirectories stay out.
+evals/*
+!evals/benchmark.ts
+!evals/fixtures
+evals/fixtures/*
+!evals/fixtures/attempts.json
+!evals/fixtures/runtime-observations.json
+!evals/fixtures/human-review.template.json
+!evals/fixtures/baseline-summary.json
 scripts/evaluate.ts
 tests
 .DS_Store
