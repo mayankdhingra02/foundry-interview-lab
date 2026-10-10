@@ -48,7 +48,7 @@ if (options.has('--help')) {
     const plan = createRolePlan(recipes.version, attempts, roles);
     if (!options.has('--record')) {
       if (options.has('--acknowledge-paid-api') || options.has('--max-usd')) throw new Error('Paid acknowledgement and spending cap require --record.');
-      await printOrSave({ mode: 'plan-only', providerCalls: 0, corpus: 'development-regression', benchmarkVersion: recipes.version, benchmarkDigest: plan.benchmarkDigest, model: plan.policy.model, roles: roles ?? EVALUATION_ROLES, plannedCalls: plan.planned.length, estimatedUpperUsd: plan.estimatedUpperUsd, quality: 'pending-independent-human-review' });
+      await printOrSave({ mode: 'plan-only', providerCalls: 0, corpus: 'development-regression', benchmarkVersion: recipes.version, benchmarkDigest: plan.benchmarkDigest, provider: plan.policy.provider, model: plan.policy.model, roles: roles ?? EVALUATION_ROLES, plannedCalls: plan.planned.length, estimatedUpperUsd: plan.estimatedUpperUsd, quality: 'pending-independent-human-review' });
     } else {
       if (!outputPath || options.get('--acknowledge-paid-api') !== true || !stringValue('--max-usd')) throw new Error('Recording needs --acknowledge-paid-api, --max-usd and a new private --output path.');
       const absolute = resolve(outputPath);
@@ -62,7 +62,7 @@ if (options.has('--help')) {
         try { await directory.sync(); } finally { await directory.close(); }
       };
       const run = await recordRoleRun(recipes.version, attempts, { acknowledgePaidApi: true, maxUsd: Number(stringValue('--max-usd')), roles, persist });
-      console.log(JSON.stringify({ runId: run.runId, state: run.state, attempted: run.entries.length, validated: run.entries.filter(row => row.state === 'validated').length, stopReason: run.stopReason, quality: 'pending-independent-human-review' }, null, 2));
+      console.log(JSON.stringify({ runId: run.runId, provider: run.policy.provider, model: run.policy.model, state: run.state, attempted: run.entries.length, validated: run.entries.filter(row => row.state === 'validated').length, stopReason: run.stopReason, quality: 'pending-independent-human-review' }, null, 2));
       if (run.state !== 'completed' || run.entries.some(row => row.state !== 'validated')) process.exitCode = 1;
     }
   }

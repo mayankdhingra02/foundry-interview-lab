@@ -1,14 +1,14 @@
 import { z } from 'zod';
 import { digest, DomainError } from '../interview-practice/domain';
 import type { InferenceRecord, JobResult, PracticeJob, Scenario, Session } from '../interview-practice/types';
-import { INPUT_BYTES, modelPolicy, type AiRole } from './policy';
+import { INPUT_BYTES, modelPolicy, type AiRole, type ModelPolicy, type ModelProvider } from './policy';
 import { authoredQuestion, observationOnlyReport } from './authored';
 
 export const PROMPT_VERSION = 'foundry-2026-10-09-v2';
 export const SCHEMA_VERSION = 'foundry-structured-v1';
 export const CONTEXT_VERSION = 'foundry-context-v2';
 const bindingSchema = z.object({
-  version: z.literal(1), provider: z.literal('openai-responses'), role: z.enum(['interviewer', 'assistant', 'coach']),
+  version: z.literal(1), provider: z.enum(['openai-responses', 'anthropic-messages']), role: z.enum(['interviewer', 'assistant', 'coach']),
   model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/),
   promptVersion: z.string().min(1).max(100), schemaVersion: z.string().min(1).max(100), contextVersion: z.string().min(1).max(100),
   maxInputBytes: z.number().int().positive().max(64_000), instructionAllowanceBytes: z.number().int().positive().max(8000),
@@ -25,8 +25,8 @@ export function minimumReservation(binding: Pick<InferenceBinding, 'maxInputByte
 export function configuredInferenceBinding(role: AiRole, minimumUsd = 0): InferenceBinding {
   return inferenceBindingFromPolicy(role, modelPolicy(), minimumUsd);
 }
-export function inferenceBindingFromPolicy(role: AiRole, policy: ReturnType<typeof modelPolicy>, minimumUsd = 0): InferenceBinding {
-  const binding = { version: 1 as const, provider: 'openai-responses' as const, role, model: policy.model,
+export function inferenceBindingFromPolicy(role: AiRole, policy: Omit<ModelPolicy, 'provider'> & { provider?: ModelProvider }, minimumUsd = 0): InferenceBinding {
+  const binding = { version: 1 as const, provider: policy.provider ?? 'openai-responses', role, model: policy.model,
     promptVersion: PROMPT_VERSION, schemaVersion: SCHEMA_VERSION, contextVersion: CONTEXT_VERSION,
     maxInputBytes: INPUT_BYTES[role], instructionAllowanceBytes: 8000, maxOutputTokens: policy.maxOutput,
     timeoutMs: 40_000, maxResponseBytes: 128_000, maxOutputCharacters: 60_000,
