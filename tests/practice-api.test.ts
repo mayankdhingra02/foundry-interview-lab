@@ -60,6 +60,22 @@ describe('authenticated practice HTTP contracts', () => {
     expect(exportPracticeSession(privateSession)).not.toHaveProperty('ownerId');
     expect(JSON.stringify(data)).not.toContain('claimToken');
   });
+  it('routes owner support permission changes and includes only that attempt in its export', async () => {
+    const session = await create(), other = localIdentityCookie().cookie;
+    const response = await api(`sessions/${session.id}/reviews`, 'POST', { requestId: requestId(), category: 'technical', message: 'My saved test result was interrupted.', inspectionConsent: false, supportActionsConsent: false });
+    expect(response.status).toBe(201); const created = (await response.json()).case;
+    expect((await api(`sessions/${session.id}/reviews`, 'GET', undefined, {}, other)).status).toBe(404);
+    expect((await api(`reviews/${created.id}/consent`, 'POST', { requestId: requestId(), expectedRevision: 1, inspectionConsent: true, supportActionsConsent: false }, {}, other)).status).toBe(404);
+    const consent = await api(`reviews/${created.id}/consent`, 'POST', { requestId: requestId(), expectedRevision: 1, inspectionConsent: true, supportActionsConsent: false });
+    expect(consent.status).toBe(200);
+    const exported = await (await api(`sessions/${session.id}/export`)).json();
+    expect(exported.reviews.cases).toHaveLength(1); expect(exported.reviews.cases[0].id).toBe(created.id);
+    expect(exported.reviews.cases[0].inspectionConsent).toBe(true);
+    const second = await create();
+    expect((await (await api(`sessions/${second.id}/export`)).json()).reviews.cases).toEqual([]);
+    await api(`sessions/${session.id}`, 'DELETE', { requestId: requestId() });
+    expect((await api(`reviews/${created.id}/consent`, 'POST', { requestId: requestId(), expectedRevision: 2, inspectionConsent: false, supportActionsConsent: false })).status).toBe(404);
+  });
   it('replays committed sequence IDs through SSE and closes on reader cancellation', async () => {
     const session = await create();
     const response = await api(`sessions/${session.id}/events`, 'GET', undefined, { accept: 'text/event-stream' });

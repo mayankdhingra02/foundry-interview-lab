@@ -8,6 +8,7 @@ export type SessionAdmissionContext = { ownerId: string; sessionId: string; requ
 export type ServiceOptions = { now?: () => Date; maxDailySessions?: number; maxActiveSessions?: number; maxDailyUsd?: number; maxMonthlyUsd?: number; maxGlobalDailyUsd?: number; maxSessionUsd?: number; maxRuns?: number; maxAiCalls?: number; leaseMs?: number; reservations?: Partial<Record<JobKind, number>>; admissionPolicy?: (context: SessionAdmissionContext) => Promise<void> };
 export type CreateSessionInput = { scenarioId: string; version?: string; mode?: 'practice' | 'simulation'; requestId: string; configuration?: Partial<SessionConfiguration>; role?: string; level?: string; skills?: string[]; targetMinutes?: number; durationMinutes?: number; aiHelp?: boolean; aiAssistance?: boolean; accommodations?: string[] };
 export type SessionMutationResult = { session: SessionView; job?: JobView; hint?: string };
+export type TrustedSupportGuard = (database: PracticeDatabase, now: string) => void;
 export function publicJob(job: PracticeJob): JobView {
   const { ownerId: _owner, claimToken: _claim, workerId: _worker, input: _input, fingerprint: _fingerprint, inference: _inference, ...view } = structuredClone(job);
   void _owner; void _claim; void _worker; void _input; void _fingerprint; void _inference;
@@ -304,7 +305,9 @@ export class SessionService {
           if (job.input.mode !== 'edit') throw new DomainError('invalid', 'Only an edit request can propose file changes.');
           if (Object.keys(result.files).some(path => !Object.hasOwn(snapshot.files, path))) throw new DomainError('invalid', 'Assistant proposed a file outside this scenario.');
           validateFiles({ ...snapshot.files, ...result.files }, scenario);
-          session.editProposals.push({ id: randomUUID(), jobId: job.id, baseSnapshotId: snapshot.id, baseSha256: snapshot.sha256, files: structuredClone(result.files), status: 'pending', createdAt: now });
+          const proposal = { id: randomUUID(), jobId: job.id, baseSnapshotId: snapshot.id, baseSha256: snapshot.sha256, files: structuredClone(result.files), status: 'pending' as const, createdAt: now };
+          session.editProposals.push(proposal);
+          appendEvent(session, 'assistant.edit-proposed', { jobId: job.id, proposalId: proposal.id, baseSnapshotId: snapshot.id, baseSha256: snapshot.sha256, paths: Object.keys(proposal.files).sort() }, job.requestId, now, 'model');
         }
         appendEvent(session, 'assistant.responded', { jobId: job.id, model: result.model }, job.requestId, now, 'model');
       } else {
@@ -330,8 +333,9 @@ export class SessionService {
       return true;
     });
   }
-  async cancelJob(ownerId: string, jobId: string, input: { requestId: string }) {
+  async cancelJob(ownerId: string, jobId: string, input: { requestId: string }, supportGuard?: TrustedSupportGuard) {
     return this.mutate(ownerId, input.requestId, 'cancel-job', { jobId }, undefined, (db, now) => {
+      supportGuard?.(db, now);
       const session = Object.values(db.sessions).find(s => s.ownerId === ownerId && s.jobs.some(j => j.id === jobId));
       const job = session?.jobs.find(j => j.id === jobId);
       if (!session || !job) throw new DomainError('not_found', 'Job not found.');
@@ -342,8 +346,9 @@ export class SessionService {
       return publicJob(job);
     });
   }
-  async retryReport(ownerId: string, id: string, input: { requestId: string }): Promise<SessionMutationResult> {
+  async retryReport(ownerId: string, id: string, input: { requestId: string }, supportGuard?: TrustedSupportGuard): Promise<SessionMutationResult> {
     return this.mutate(ownerId, input.requestId, 'retry-report', {}, id, (db, now) => {
+      supportGuard?.(db, now);
       const session = ownedSession(db.sessions, ownerId, id);
       if (!session.frozenEvidence) throw new DomainError('conflict', 'Final submit must freeze the evidence before requesting a report.');
       if (session.reports.length) return { session: sessionView(session) };
@@ -362,6 +367,10 @@ export class SessionService {
     // The filesystem adapter embeds artifacts in one store. Its atomic rewrite erases them; inventory is empty.
     db.deletions.push({ id: randomUUID(), ownerId, sessionId: id, createdAt: now, state: 'completed', objectKeys: [], completedAt: now });
     delete db.sessions[id];
+    if (db.reviews) {
+      for (const field of ['cases','drafts','decisions','publications'] as const) for (const [key, record] of Object.entries(db.reviews[field])) if (record.sessionId === id && record.ownerId === ownerId) delete db.reviews[field][key];
+      db.reviews.audits = db.reviews.audits.filter(record => record.sessionId !== id || record.ownerId !== ownerId);
+    }
     for (const [key, request] of Object.entries(db.requests)) {
       const result = request.result as { session?: { id?: string }; sessionId?: string } | null;
       if (request.ownerId === ownerId && (request.sessionId === id || result?.session?.id === id || result?.sessionId === id)) delete db.requests[key];
