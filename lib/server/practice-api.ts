@@ -16,6 +16,7 @@ import { InteractionService } from './interactions';
 import type { SessionMutationResult } from './session-service';
 import { buildProgression } from '../interview-practice/progression';
 import { admittedScenarios } from './rollout';
+import { withFoundryNavigation } from './foundry-navigation';
 
 const mutation = z.object({ requestId: z.string().min(8).max(128), expectedRevision: z.number().int().nonnegative() });
 const key = z.object({ requestId: z.string().min(8).max(128) });
@@ -40,7 +41,7 @@ export async function practiceApi(request: Request, path: string[]) {
       const goals = parsed(z.array(z.string().min(1).max(100)).max(20), new URL(request.url).searchParams.getAll('competency'));
       const known = new Set([...catalog, ...sessions.map(session => session.scenario)].flatMap(scenario => scenario.rubric.map(criterion => criterion.id)));
       if (goals.some(id => !known.has(id))) throw new HttpError(400, 'unknown_competency', 'Choose authored criteria from the catalog or your saved attempts.');
-      return privateJson(buildProgression(sessions, admittedScenarios(catalog), { selectedCompetencies: goals }));
+      return privateJson(withFoundryNavigation(buildProgression(sessions, admittedScenarios(catalog), { selectedCompetencies: goals })));
     }
     if (path[0] === 'sessions' && path.length === 1) {
       if (method === 'GET') return privateJson({ sessions: await service.listSessions(actor.id) });

@@ -27,15 +27,19 @@ export type PracticeRecommendation = {
   version: string; href: string; durationMinutes: number; matchedCompetencyIds: string[];
   matchedGoalIds: string[]; matchingBasis: 'same-criterion' | 'authored-transfer-map' | 'selected-goal' | 'catalog-exploration';
 };
+export type FoundryLessonNavigation =
+  | { status: 'available'; href: string }
+  | { status: 'unavailable'; reason: 'not-configured' | 'invalid-configuration' | 'unknown-lesson' };
 export type FoundryLessonReference = {
   id: string; title: string; foundryPath: string; estimatedMinutes: number;
   competencies: string[]; verifiedFrom: 'main-foundry-source'; verifiedAt: '2026-10-09';
   requiresFoundryIntegration: true;
+  navigation?: FoundryLessonNavigation;
 };
 export type StudyStep =
   | { kind: 'scenario'; id: string; title: string; reason: string; href: string; scenarioId: string; version: string; fresh: boolean; competencyIds: string[]; estimatedMinutes: number }
   | { kind: 'drill'; id: string; title: string; reason: string; href: string; sessionId: string; scenarioId: string; scenarioVersion: string; drillId: string; competencyIds: string[]; lesson: string; exercise: string; completedSelfReport: boolean }
-  | { kind: 'lesson'; id: string; title: string; reason: string; foundryPath: string; competencyIds: string[]; estimatedMinutes: number; requiresFoundryIntegration: true };
+  | { kind: 'lesson'; id: string; title: string; reason: string; foundryPath: string; competencyIds: string[]; estimatedMinutes: number; requiresFoundryIntegration: true; navigation?: FoundryLessonNavigation };
 export type ProgressionResult = {
   skills: SkillProgress[]; recommendations: PracticeRecommendation[];
   studyPlan: { policyVersion: 'deterministic-v1'; status: 'cold-start' | 'provisional' | 'catalog-limited'; selectedCompetencies: string[]; steps: StudyStep[]; explanation: string; limitations: string[]; foundryLessons: FoundryLessonReference[] };
@@ -68,6 +72,11 @@ const lessons: FoundryLessonReference[] = [
   lesson('relationships-interfaces', 'Design relationships and interfaces that carry behavior', '/low-level-design/lessons/relationships-interfaces', 19, ['interface-compatibility']),
   lesson('responsibilities-ownership', 'Assign responsibilities and ownership', '/low-level-design/lessons/responsibilities-ownership', 20, ['repository-comprehension', 'responsibility-boundaries']),
 ];
+// Resolve navigation only for the exact reviewed source mapping. A task/model/
+// request cannot turn a lesson reference into an arbitrary external destination.
+export function isAuthoredFoundryLesson(id: string, path: string): boolean {
+  return lessons.some(item => item.id === id && item.foundryPath === path);
+}
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const compareTime = (a: string, b: string) => Date.parse(a) - Date.parse(b) || compare(a, b);
 const unique = (values: string[]) => [...new Set(values)].sort(compare);
