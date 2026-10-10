@@ -1,5 +1,6 @@
 import { runnerHealth } from '../runtime/runner';
 import { modelPolicy } from '../ai/policy';
+import { billingConfigured } from '../billing/config';
 
 export function enabled(name: string, fallback = false): boolean {
   const value = process.env[name];
@@ -22,7 +23,7 @@ export function capabilities() {
   return {
     ai, interviewer: ai, assistant: ai, runner, accounts: authMode() === 'supabase',
     voice: enabled('FEATURE_VOICE') && Boolean(process.env.DEEPGRAM_API_KEY),
-    billing: enabled('FEATURE_BILLING') && Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRICE_ID),
+    billing: billingConfigured(),
     authMode: authMode(),
     details: {
       ai: ai ? 'Configured model inference. Quality qualification is tracked separately.' : 'Authored questions and observation-only reports; AI assistance is unavailable.',
