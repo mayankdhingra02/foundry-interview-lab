@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { Pool } from 'pg';
 import { getScenario } from '../lib/content/scenarios';
 import { PostgresPracticeStore } from '../lib/server/postgres-store';
 import { SessionService } from '../lib/server/session-service';
 import { probeReadiness } from '../lib/server/operations';
-import { withDisposablePostgres, type DisposableDatabase } from '../scripts/operations/disposable-postgres';
+import { disposableServiceContender, withDisposablePostgres, type DisposableDatabase } from '../scripts/operations/disposable-postgres';
 
 // Auth/schema/owners are synthetic. This explicit CI opt-in never uses DATABASE_URL.
 describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== '1')('permanent account fence in disposable PostgreSQL', () => {
@@ -54,23 +53,23 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== '1')('permanent account
       override async captureOwnerObjectKeys(ownerId: string) { const keys = await super.captureOwnerObjectKeys(ownerId); entered = true; await closeGate; return keys; }
     }
     const createName = `closing-create-${randomUUID()}`, claimName = `closing-claim-${randomUUID()}`, artifactName = `closing-artifact-${randomUUID()}`;
-    const createPool = new Pool({ ...database.service.options, max: 1, application_name: createName });
-    const claimPool = new Pool({ ...database.service.options, max: 1, application_name: claimName });
-    const artifactPool = new Pool({ ...database.service.options, max: 1, application_name: artifactName });
+    const createPool = disposableServiceContender(database.service, createName);
+    const claimPool = disposableServiceContender(database.service, claimName);
+    const artifactPool = disposableServiceContender(database.service, artifactName);
     const closingService = new SessionService(new PausedCloseStore(database.service), getScenario);
     const creating = new SessionService(new PostgresPracticeStore(createPool, { lockTimeoutMs: 15_000, statementTimeoutMs: 30_000 }), getScenario);
     const worker = new SessionService(new PostgresPracticeStore(claimPool, { lockTimeoutMs: 15_000, statementTimeoutMs: 30_000 }), getScenario);
-    const closing = closingService.closeAccount(owner, { requestId: randomUUID() });
-    void closing.catch(() => undefined);
-    const outstanding: Promise<unknown>[] = [closing];
+    const outstanding: Promise<unknown>[] = [];
+    function track<T>(promise: Promise<T>): Promise<T> { outstanding.push(promise); void promise.catch(() => undefined); return promise; }
+    const closing = track(closingService.closeAccount(owner, { requestId: randomUUID() }));
+    let primaryFailure = false;
     try {
       await vi.waitFor(() => { expect(entered).toBe(true); }, { timeout: 5_000 });
-      const creation = creating.createSession(owner, { scenarioId: 'monetary-validation', requestId: randomUUID() });
-      const denied = expect(creation).rejects.toMatchObject({ code: 'account_closing' });
-      const claim = worker.claimJob('synthetic-race-worker');
-      const artifact = artifactPool.query('insert into public.ai_practice_artifacts(session_id,user_id,kind,storage_key,sha256,byte_count) values($1,$2,$3,$4,$5,10)', [session.id, owner, 'export', `synthetic-late/${owner}`, 'b'.repeat(64)]);
-      const deniedArtifact = expect(artifact).rejects.toMatchObject({ code: '23514' });
-      outstanding.push(creation, denied, claim, artifact, deniedArtifact);
+      const creation = track(creating.createSession(owner, { scenarioId: 'monetary-validation', requestId: randomUUID() }));
+      const denied = track(expect(creation).rejects.toMatchObject({ code: 'account_closing' }));
+      const claim = track(worker.claimJob('synthetic-race-worker'));
+      const artifact = track(artifactPool.query('insert into public.ai_practice_artifacts(session_id,user_id,kind,storage_key,sha256,byte_count) values($1,$2,$3,$4,$5,10)', [session.id, owner, 'export', `synthetic-late/${owner}`, 'b'.repeat(64)]));
+      const deniedArtifact = track(expect(artifact).rejects.toMatchObject({ code: '23514' }));
       await vi.waitFor(async () => {
         const waiting = (await database.admin.query("select count(*)::int as count from pg_stat_activity where application_name=any($1::text[]) and wait_event_type='Lock' and wait_event='advisory'", [[createName, claimName, artifactName]])).rows[0].count;
         expect(waiting).toBe(3);
@@ -79,7 +78,13 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== '1')('permanent account
       await closing; await denied; await deniedArtifact; expect(await claim).toBeNull();
       expect((await database.service.query("select count(*)::int as count from public.ai_practice_usage_ledger where user_id=$1 and kind='admission'", [owner])).rows[0].count).toBe(1);
       expect((await database.service.query('select count(*)::int as count from public.ai_practice_jobs where user_id=$1', [owner])).rows[0].count).toBe(0);
-    } finally { continueClose(); await Promise.allSettled(outstanding); await createPool.end(); await claimPool.end(); await artifactPool.end(); }
+    } catch (error) { primaryFailure = true; throw error; }
+    finally {
+      continueClose(); await Promise.allSettled(outstanding);
+      const cleanup = await Promise.allSettled([createPool.end(), claimPool.end(), artifactPool.end()]);
+      const failed = cleanup.find(result => result.status === 'rejected');
+      if (!primaryFailure && failed?.status === 'rejected') throw failed.reason;
+    }
   }, 60_000);
 
   it('rejects stale completions and SQL reopening, and enforces private immutable fence privileges/readiness', async () => {
