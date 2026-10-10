@@ -7,6 +7,7 @@ import { capabilities } from './config';
 import { inferenceReservations } from '../ai/policy';
 import { getBillingService } from '../billing/application';
 import { rolloutAdmissionPolicy } from './rollout';
+import { admissionLimitsFromEnvironment } from '../interview-practice/admission';
 
 let service: Promise<SessionService> | undefined;
 export function getService(): Promise<SessionService> {
@@ -25,6 +26,7 @@ export function getService(): Promise<SessionService> {
     if (!caps.coaching) reservations.coach = 0;
     const billing = getBillingService();
     return new SessionService(store, getScenario, {
+      admissionLimits: admissionLimitsFromEnvironment(process.env),
       maxSessionUsd: Number(process.env.MAX_SESSION_USD || 1),
       maxDailyUsd: Number(process.env.MAX_DAILY_USER_USD || 5),
       maxMonthlyUsd: Number(process.env.MAX_MONTHLY_USER_USD || 50),
