@@ -31,6 +31,8 @@ export interface PracticeStore {
   captureOwnerObjectKeys?(ownerId: string): Promise<string[]>;
   /** PostgreSQL must verify durable private accounting before permanent close. */
   assertDurableAccounting?(): Promise<void>;
+  /** Trusted transaction-only preflight before private object cleanup and progress. */
+  assertPrivateCleanupReady?(): Promise<void>;
 }
 // This adapter deliberately targets one local machine. Public deployments must select a qualified database adapter.
 export class FilePracticeStore implements PracticeStore {

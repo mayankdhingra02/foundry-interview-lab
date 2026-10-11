@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { inferenceBindingFromPolicy } from '../lib/ai/binding';
 import { getScenario } from '../lib/content/scenarios';
 import { budgetTotals } from '../lib/interview-practice/quota';
@@ -11,6 +11,8 @@ import { reconcileVoiceReservations, reserveVoice, settleVoice } from '../lib/vo
 import type { VoiceConfig } from '../lib/voice/config';
 import { withDisposablePostgres, type DisposableDatabase } from '../scripts/operations/disposable-postgres';
 import { voiceDebriefFixture } from './voice-fixtures';
+import { runPrivateFileCleanup } from '../lib/server/private-file-cleanup';
+import type { PrivateObjectStore } from '../lib/server/private-object-store';
 
 // Explicit opt-in only: fresh owned database, synthetic prices and no providers.
 describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== '1')('durable usage after Auth cascade in disposable PostgreSQL', () => {
@@ -89,5 +91,42 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== '1')('durable usage aft
       expect((await practice.getSession(id, session.id)).id).toBe(session.id);
       expect((await probeReadiness(database.service, { executionRequired: false })).checks.schema).toBe('missing');
     } finally { await database.admin.query('alter table public.ai_practice_usage_ledger drop constraint synthetic_legacy_auth_fk'); }
+  }, 60_000);
+
+  it('rejects mismatched deletion session/creation columns before any Storage operation', async () => {
+    const at = '2026-10-14T12:00:00.321Z', practice = service(at), id = await owner();
+    await practice.closeAccount(id, { requestId: randomUUID() });
+    const sessionId = randomUUID(), deletion = { id: randomUUID(), ownerId: id, sessionId, state: 'pending' as const, createdAt: at, objectKeys: [`owners/${id}/sessions/${sessionId}/artifacts/${randomUUID()}`] };
+    await practice.store.transaction(state => { state.deletions.push(deletion); });
+    const objects: PrivateObjectStore = { targetDigest: 'a'.repeat(64), verifyPrivateBucket: vi.fn(async () => true), remove: vi.fn(async () => undefined), absence: vi.fn(async () => 'absent' as const) };
+    for (const payload of [{ ...deletion, sessionId: randomUUID() }, { ...deletion, createdAt: '2026-10-14T12:00:00.322Z' }]) {
+      await database.admin.query('update public.ai_practice_deletions set runtime_payload=$2::jsonb where id=$1', [deletion.id, JSON.stringify(payload)]);
+      try {
+        await expect(runPrivateFileCleanup(practice.store, objects, { apply: true })).rejects.toMatchObject({ code: 'unavailable' });
+        expect(objects.verifyPrivateBucket).not.toHaveBeenCalled(); expect(objects.remove).not.toHaveBeenCalled(); expect(objects.absence).not.toHaveBeenCalled();
+      } finally { await database.admin.query('update public.ai_practice_deletions set runtime_payload=$2::jsonb where id=$1', [deletion.id, JSON.stringify(deletion)]); }
+    }
+    await database.admin.query('delete from public.ai_practice_deletions where id=$1', [deletion.id]);
+  }, 60_000);
+
+  it('blocks private cleanup before Storage when a closing guard or RESTRICT inventory FK is missing', async () => {
+    const at = '2026-10-15T12:00:00.000Z', practice = service(at), id = await owner();
+    await practice.closeAccount(id, { requestId: randomUUID() });
+    const sessionId = randomUUID(), deletion = { id: randomUUID(), ownerId: id, sessionId, state: 'pending' as const, createdAt: at, objectKeys: [`owners/${id}/sessions/${sessionId}/artifacts/${randomUUID()}`] };
+    await practice.store.transaction(state => { state.deletions.push(deletion); });
+    const objects: PrivateObjectStore = { targetDigest: 'a'.repeat(64), verifyPrivateBucket: vi.fn(async () => true), remove: vi.fn(async () => undefined), absence: vi.fn(async () => 'absent' as const) };
+    await practice.store.transaction(() => practice.store.assertPrivateCleanupReady!());
+    for (const [alter, restore] of [
+      ['alter table public.ai_practice_account_closings disable trigger ai_practice_account_closing_guard', 'alter table public.ai_practice_account_closings enable trigger ai_practice_account_closing_guard'],
+      ['alter table public.ai_practice_account_closings drop constraint ai_practice_account_closings_cleanup_id_fkey', 'alter table public.ai_practice_account_closings add constraint ai_practice_account_closings_cleanup_id_fkey foreign key(cleanup_id) references public.ai_practice_deletions(id) on delete restrict'],
+    ]) {
+      await database.admin.query(alter);
+      try {
+        await expect(runPrivateFileCleanup(practice.store, objects, { apply: true })).rejects.toMatchObject({ code: 'unavailable' });
+        expect(objects.verifyPrivateBucket).not.toHaveBeenCalled(); expect(objects.remove).not.toHaveBeenCalled(); expect(objects.absence).not.toHaveBeenCalled();
+        expect((await practice.store.read()).deletions.find(record => record.id === deletion.id)).toEqual(deletion);
+      } finally { await database.admin.query(restore); }
+    }
+    await database.admin.query('delete from public.ai_practice_deletions where id=$1', [deletion.id]);
   }, 60_000);
 });

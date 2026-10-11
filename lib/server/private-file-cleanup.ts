@@ -51,21 +51,28 @@ function current(database: PracticeDatabase, claim: Claim, targetDigest: string,
 /** Operator-only manual batch. Storage requests never run under a database transaction. */
 export async function runPrivateFileCleanup(store: PracticeStore, objects?: PrivateObjectStore, options: Options = {}): Promise<PrivateCleanupSummary> {
   const apply = options.apply ?? false, maxRecords = options.maxRecords ?? PRIVATE_CLEANUP_POLICY.defaultRecords, maxObjects = options.maxObjects ?? PRIVATE_CLEANUP_POLICY.defaultObjects;
+  const targetDigest = objects?.targetDigest;
   if (typeof apply !== 'boolean' || !Number.isInteger(maxRecords) || maxRecords < 1 || maxRecords > PRIVATE_CLEANUP_POLICY.maxRecords || !Number.isInteger(maxObjects) || maxObjects < 1 || maxObjects > PRIVATE_CLEANUP_POLICY.maxObjects
     || (apply && (!objects || !/^[a-f0-9]{64}$/.test(objects.targetDigest)))) throw new Error('cleanup_options_invalid');
   const now = () => { const value = (options.now?.() ?? new Date()).getTime(); if (!Number.isFinite(value)) throw new Error('cleanup_clock_invalid'); return value; };
+  const assertReady = async () => {
+    if (objects?.targetDigest !== targetDigest) throw new Error('cleanup_target_changed');
+    await store.assertPrivateCleanupReady?.();
+  };
   const summary: PrivateCleanupSummary = { event: 'private_file_cleanup.finished', policy: PRIVATE_CLEANUP_POLICY.version, mode: apply ? 'apply' : 'dry_run', status: 'complete', pendingRecords: 0, eligibleRecords: 0, unanchoredRecords: 0, unrecognizedObjects: 0, malformedRecords: 0, leasedRecords: 0, deferredRecords: 0, exhaustedRecords: 0, targetMismatchRecords: 0, attemptedRecords: 0, verifiedAbsentObjects: 0, completedRecords: 0, failedRecords: 0, staleResults: 0 };
-  scan(await store.read(), now(), objects?.targetDigest, summary);
+  scan(await store.read(), now(), targetDigest, summary);
   if (!apply || summary.eligibleRecords === 0) return summary;
   if (options.signal?.aborted) { summary.status = 'interrupted'; return summary; }
+  await store.transaction(async () => { await assertReady(); });
   let verified = false; try { verified = await objects!.verifyPrivateBucket(options.signal); } catch { /* No private diagnostics escape. */ }
   if (!verified) { summary.status = options.signal?.aborted ? 'interrupted' : 'bucket_unverified'; return summary; }
   let processed = 0; const visited = new Set<string>();
   while (summary.attemptedRecords < maxRecords && processed < maxObjects && !options.signal?.aborted) {
-    const claim = await store.transaction(database => {
-      const item = scan(database, now(), objects!.targetDigest).find(record => !visited.has(record.id)); if (!item) return;
+    const claim = await store.transaction(async database => {
+      await assertReady();
+      const item = scan(database, now(), targetDigest).find(record => !visited.has(record.id)); if (!item) return;
       const timestamp = now(), token = randomUUID();
-      item.cleanup = { version: 1, targetDigest: objects!.targetDigest, attempt: (item.cleanup?.attempt ?? 0) + 1, failureCount: effectiveFailures(item, timestamp), claimToken: token, leaseExpiresAt: new Date(timestamp + PRIVATE_CLEANUP_POLICY.leaseMs).toISOString(), nextAttemptAt: null, lastError: null };
+      item.cleanup = { version: 1, targetDigest: targetDigest!, attempt: (item.cleanup?.attempt ?? 0) + 1, failureCount: effectiveFailures(item, timestamp), claimToken: token, leaseExpiresAt: new Date(timestamp + PRIVATE_CLEANUP_POLICY.leaseMs).toISOString(), nextAttemptAt: null, lastError: null };
       const anchorId = database.accountClosings![item.ownerId].cleanupId;
       return { id: item.id, ownerId: item.ownerId, anchorId, token, leaseExpiresAt: timestamp + PRIVATE_CLEANUP_POLICY.leaseMs, keys: item.objectKeys.filter(key => ownsPrivateInventoryKey(item, key, anchorId)).slice(0, maxObjects - processed), inventory: [...item.objectKeys] } satisfies Claim;
     });
@@ -74,14 +81,17 @@ export async function runPrivateFileCleanup(store: PracticeStore, objects?: Priv
     for (const key of claim.keys) {
       if (options.signal?.aborted) { failure = 'interrupted'; break; }
       if (now() >= claim.leaseExpiresAt) { summary.staleResults++; stale = true; break; }
+      const admitted = await store.transaction(async database => { await assertReady(); return Boolean(current(database, claim, targetDigest!, now())); });
+      if (!admitted) { summary.staleResults++; stale = true; break; }
       processed++;
       try { await objects!.remove(claim.ownerId, key, options.signal); } catch { /* Even a lost delete response can be reconciled by exact absence. */ }
       let absence: 'absent' | 'present' | 'unknown' = 'unknown';
       try { absence = await objects!.absence(claim.ownerId, key, options.signal); } catch { /* Preserve the inventory. */ }
       if (options.signal?.aborted) { failure = 'interrupted'; break; }
       if (absence !== 'absent') { failure = absence === 'present' ? 'object_still_present' : 'absence_unverified'; continue; }
-      const accepted = await store.transaction(database => {
-        const item = current(database, claim, objects!.targetDigest, now()); if (!item) return false;
+      const accepted = await store.transaction(async database => {
+        await assertReady();
+        const item = current(database, claim, targetDigest!, now()); if (!item) return false;
         item.objectKeys = item.objectKeys.filter(value => value !== key); claim.inventory = [...item.objectKeys];
         if (!item.objectKeys.length) {
           item.state = 'completed'; item.completedAt = new Date(now()).toISOString();
@@ -94,8 +104,9 @@ export async function runPrivateFileCleanup(store: PracticeStore, objects?: Priv
       if (!claim.inventory.length) { summary.completedRecords++; break; }
     }
     if (!stale && claim.inventory.length) {
-      const accepted = await store.transaction(database => {
-        const item = current(database, claim, objects!.targetDigest, now()); if (!item) return false;
+      const accepted = await store.transaction(async database => {
+        await assertReady();
+        const item = current(database, claim, targetDigest!, now()); if (!item) return false;
         const failureCount = item.cleanup!.failureCount + (failure ? 1 : 0);
         item.cleanup = { ...item.cleanup!, failureCount, claimToken: null, leaseExpiresAt: null, nextAttemptAt: failure ? new Date(now() + Math.min(300_000, 5000 * 2 ** (failureCount - 1))).toISOString() : null, lastError: failure };
         return true;

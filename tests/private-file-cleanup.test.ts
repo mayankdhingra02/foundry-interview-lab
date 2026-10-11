@@ -58,6 +58,31 @@ describe('manual leased private-file cleanup', () => {
     expect(await runPrivateFileCleanup(fixture.store, fixture.objects, apply)).toMatchObject({ status: 'bucket_unverified', attemptedRecords: 0 });
     expect(fixture.objects.remove).not.toHaveBeenCalled(); expect(await fixture.store.read()).toEqual(before);
   });
+  it('requires live closing readiness inside a transaction before any Storage request', async () => {
+    const fixture = await setup(), before = await fixture.store.read();
+    const guard = vi.fn(async () => { throw new Error('unavailable'); }); Object.assign(fixture.store, { assertPrivateCleanupReady: guard });
+    await expect(runPrivateFileCleanup(fixture.store, fixture.objects, apply)).rejects.toThrow('unavailable');
+    expect(guard).toHaveBeenCalledTimes(1); expect(fixture.objects.verifyPrivateBucket).not.toHaveBeenCalled(); expect(fixture.objects.remove).not.toHaveBeenCalled();
+    expect(await fixture.store.read()).toEqual(before);
+  });
+  it('rechecks live readiness at claim and refuses changed guard state before delete', async () => {
+    const fixture = await setup(), before = await fixture.store.read(); let ready = true;
+    Object.assign(fixture.store, { assertPrivateCleanupReady: vi.fn(async () => { if (!ready) throw new Error('guard_disabled'); }) });
+    vi.mocked(fixture.objects.verifyPrivateBucket).mockImplementation(async () => { ready = false; return true; });
+    await expect(runPrivateFileCleanup(fixture.store, fixture.objects, apply)).rejects.toThrow('guard_disabled');
+    expect(fixture.objects.remove).not.toHaveBeenCalled(); expect(await fixture.store.read()).toEqual(before);
+  });
+  it('does not acknowledge absence if guard readiness or target identity changes during external work', async () => {
+    const fixture = await setup(undefined, 1); let ready = true;
+    Object.assign(fixture.store, { assertPrivateCleanupReady: vi.fn(async () => { if (!ready) throw new Error('guard_disabled'); }) });
+    vi.mocked(fixture.objects.absence).mockImplementationOnce(async () => { ready = false; return 'absent'; });
+    await expect(runPrivateFileCleanup(fixture.store, fixture.objects, apply)).rejects.toThrow('guard_disabled');
+    expect((await fixture.store.read()).deletions[0].objectKeys).toEqual(fixture.keys);
+    const other = await setup(undefined, 1);
+    vi.mocked(other.objects.absence).mockImplementationOnce(async () => { Object.assign(other.objects, { targetDigest: digest('changed during work') }); return 'absent'; });
+    await expect(runPrivateFileCleanup(other.store, other.objects, apply)).rejects.toThrow('target_changed');
+    expect((await other.store.read()).deletions[0].objectKeys).toEqual(other.keys);
+  });
   it('verifies every exact object absent before completing a content-free retained anchor', async () => {
     const fixture = await setup(), before = await fixture.store.read();
     const result = await runPrivateFileCleanup(fixture.store, fixture.objects, apply);

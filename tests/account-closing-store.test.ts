@@ -30,7 +30,7 @@ function closingRecords() {
   const cleanup = { id: cleanupId, ownerId, sessionId: cleanupId, state: 'completed', objectKeys: [], createdAt, completedAt: createdAt };
   const closing = { ownerId, cleanupId, requestId: randomUUID(), fingerprint: digest('fixed closing fixture'), createdAt };
   const records = {
-    ai_practice_deletions: [{ id: cleanupId, opaque_owner_id: ownerId, inventory: cleanup.objectKeys, state: cleanup.state, attempt: 0, claim_token: null, lease_expires_at: null, completed_at: cleanup.completedAt, runtime_payload: cleanup }],
+    ai_practice_deletions: [{ id: cleanupId, opaque_owner_id: ownerId, opaque_session_id: cleanup.sessionId, created_at: cleanup.createdAt, inventory: cleanup.objectKeys, state: cleanup.state, attempt: 0, claim_token: null, lease_expires_at: null, completed_at: cleanup.completedAt, runtime_payload: cleanup }],
     ai_practice_account_closings: [{ opaque_owner_id: ownerId, request_id: closing.requestId, fingerprint: closing.fingerprint, cleanup_id: cleanupId, created_at: createdAt, runtime_payload: closing }],
   };
   return { ownerId, cleanup, closing, records };
