@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
+import { readySchema } from './readiness-fixtures';
 import { digest } from '../lib/interview-practice/domain';
 import { getScenario } from '../lib/content/scenarios';
 import { PostgresPracticeStore } from '../lib/server/postgres-store';
@@ -8,11 +9,12 @@ import { SessionService } from '../lib/server/session-service';
 
 const tables = ['ai_practice_sessions','ai_practice_snapshots','ai_practice_events','ai_practice_jobs','ai_practice_reports','ai_practice_requests','ai_practice_usage_ledger','ai_practice_deletions','ai_practice_turns','ai_practice_runs','ai_practice_assistant_messages','ai_practice_edit_proposals','ai_practice_evidence_manifests','ai_practice_account_closings'];
 type Row = Record<string, unknown> & { runtime_payload: unknown };
-function transport(options: { records?: Record<string, Row[]>; keys?: string[]; metadata?: { count: string; bytes: string; maximum: string }; closingReady?: boolean } = {}) {
+function transport(options: { records?: Record<string, Row[]>; keys?: string[]; metadata?: { count: string; bytes: string; maximum: string }; closingReady?: boolean; durable?: boolean } = {}) {
   const records = options.records ?? {}, present = options.closingReady === false ? tables.slice(0, -1) : tables;
   const keys = options.keys ?? [];
   const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
     void parameters;
+    if (sql.includes('as \"foreignKeyCount\"')) { const rows = readySchema().filter(row => row.name === 'ai_practice_usage_ledger'); if (options.durable === false) rows[0].foreignKeyCount = 1; return { rows }; }
     if (sql.includes('to_regclass')) return { rows: [{ table_name: null, closing_table: options.closingReady === false ? null : 'ai_practice_account_closings' }] };
     if (sql.includes('as maximum')) return { rows: [options.metadata ?? { count: String(keys.length), bytes: String(keys.join('').length), maximum: String(Math.max(0, ...keys.map(key => key.length))) }] };
     if (sql.startsWith('select storage_key')) return { rows: keys.map(storage_key => ({ storage_key })) };
@@ -28,7 +30,7 @@ function closingRecords() {
   const cleanup = { id: cleanupId, ownerId, sessionId: cleanupId, state: 'completed', objectKeys: [], createdAt, completedAt: createdAt };
   const closing = { ownerId, cleanupId, requestId: randomUUID(), fingerprint: digest('fixed closing fixture'), createdAt };
   const records = {
-    ai_practice_deletions: [{ id: cleanupId, opaque_owner_id: ownerId, runtime_payload: cleanup }],
+    ai_practice_deletions: [{ id: cleanupId, opaque_owner_id: ownerId, inventory: cleanup.objectKeys, state: cleanup.state, attempt: 0, claim_token: null, lease_expires_at: null, completed_at: cleanup.completedAt, runtime_payload: cleanup }],
     ai_practice_account_closings: [{ opaque_owner_id: ownerId, request_id: closing.requestId, fingerprint: closing.fingerprint, cleanup_id: cleanupId, created_at: createdAt, runtime_payload: closing }],
   };
   return { ownerId, cleanup, closing, records };
@@ -100,5 +102,16 @@ describe('account fence persistence and inventory bounds (fake PostgreSQL transp
     const { store, query } = transport({ closingReady: false });
     await expect(new SessionService(store, getScenario).closeAccount(randomUUID(), { requestId: randomUUID() })).rejects.toMatchObject({ code: 'unavailable' });
     expect(query.mock.calls.some(([sql]) => /^(insert into|delete from)/.test(sql))).toBe(false);
+  });
+
+  it('rejects both first close and old acknowledgment when live accounting still cascades on Auth', async () => {
+    for (const records of [{}, closingRecords().records] as Record<string, Row[]>[]) {
+      const { store, query } = transport({ records, durable: false });
+      const owner = Object.values(records).flat().find(row => row.opaque_owner_id)?.opaque_owner_id as string | undefined;
+      await expect(new SessionService(store, getScenario).closeAccount(owner ?? randomUUID(), { requestId: randomUUID() })).rejects.toMatchObject({ code: 'unavailable' });
+      expect(query.mock.calls.some(([sql]) => /^(insert into|delete from)/.test(sql))).toBe(false);
+      expect(query.mock.calls.at(-1)?.[0]).toBe('rollback');
+      await expect(store.assertDurableAccounting()).rejects.toMatchObject({ code: 'unavailable' });
+    }
   });
 });

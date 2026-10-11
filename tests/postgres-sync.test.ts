@@ -25,7 +25,7 @@ async function fixture(result?: unknown) {
     ai_practice_snapshots: session.snapshots.map(item => ({ id: item.id, session_id: session.id, user_id: owner, sequence: item.sequence, content_sha256: item.sha256, created_at: item.createdAt, runtime_payload: item })),
     ai_practice_events: session.events.map(item => ({ id: item.id, session_id: session.id, user_id: owner, sequence: item.sequence, event_type: item.type, source: item.source, request_id: item.requestId, schema_version: item.schemaVersion, payload: item.payload, runtime_payload: item })),
     ai_practice_requests: Object.values(database.requests).map(item => ({ user_id: item.ownerId, request_id: item.requestId, fingerprint: item.fingerprint, runtime_payload: item })),
-    ai_practice_usage_ledger: database.ledger.map(item => ({ id: item.id, user_id: owner, operation_id: item.operationId, runtime_payload: item })),
+    ai_practice_usage_ledger: database.ledger.map(item => ({ id: item.id, user_id: owner, opaque_session_id: item.sessionId, operation_id: item.operationId, kind: item.kind, amount_usd: item.amountUsd, created_at: item.createdAt, runtime_payload: item })),
   };
   let packages: Package[] = [];
   // This transport preserves projected JSON row shapes and records write

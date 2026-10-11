@@ -39,7 +39,7 @@ export function reservationBudgetAt(ledger: readonly LedgerEntry[], identity: Pi
 export function budgetTotals(ledger: readonly LedgerEntry[], ownerId: string, now: string): BudgetTotals {
   const current = utc(now), day = current.slice(0,10), month = current.slice(0,7), groups = new Map<string, PostingGroup>();
   for (const entry of ledger) {
-    if (!Number.isFinite(entry.amountUsd) || typeof entry.ownerId !== 'string' || !entry.ownerId || typeof entry.sessionId !== 'string' || !entry.sessionId || typeof entry.operationId !== 'string' || !['admission','reservation','settlement','uncertain'].includes(entry.kind)) throw invalid();
+    if (!Number.isFinite(entry.amountUsd) || entry.kind !== 'settlement' && entry.amountUsd < 0 || typeof entry.ownerId !== 'string' || !entry.ownerId || typeof entry.sessionId !== 'string' || !entry.sessionId || typeof entry.operationId !== 'string' || !['admission','reservation','settlement','uncertain'].includes(entry.kind)) throw invalid();
     utc(entry.createdAt);
     const key = ledgerBudgetGroupKey(entry); if (!key) continue;
     const group = groups.get(key) ?? { reservations: [], settlements: [], uncertain: false };
