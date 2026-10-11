@@ -553,6 +553,9 @@ export class SessionService {
     ownerId = ownerId.toLowerCase();
     assertRequestId(input.requestId);
     return this.store.transaction(async db => {
+      // Every retry is checked before acknowledging closure/Auth deletion. A
+      // legacy cascading ledger must not silently erase global commitments.
+      await this.store.assertDurableAccounting?.();
       const existing = accountClosing(db, ownerId);
       const result = (cleanupId: string): AccountClosingResult => {
         const cleanup = db.deletions.find(item => item.id === cleanupId && item.ownerId === ownerId);

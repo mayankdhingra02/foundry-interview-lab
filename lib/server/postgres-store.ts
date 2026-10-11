@@ -6,6 +6,8 @@ import type { EvidenceManifest, PracticeDatabase, ReviewDatabase, Session } from
 import { emptyDatabase, validateStoredEvents, type PracticeStore } from './store';
 import { HttpError } from './http';
 import { preserveAccountClosings } from '../interview-practice/account-closing';
+import { assertContentFreePosting } from '../interview-practice/accounting';
+import { durableLedgerReady, readinessSchemaQuery, readinessTableNames, schemaCapabilitiesReady, type SchemaCapability } from './readiness-schema';
 
 type EntityRow = { key: string; columns: Record<string, unknown>; value: unknown };
 type TableSpec = { table: string; keys: string[]; rows: EntityRow[] };
@@ -24,8 +26,8 @@ const readColumns: Record<PracticeTable, readonly string[]> = {
   ai_practice_jobs: ['id','session_id','user_id','state','fencing_token','claim_token','runtime_sequence','created_at','runtime_payload'],
   ai_practice_reports: ['id','session_id','user_id','runtime_sequence','created_at','runtime_payload'],
   ai_practice_requests: ['user_id','request_id','fingerprint','runtime_payload'],
-  ai_practice_usage_ledger: ['id','user_id','operation_id','runtime_payload'],
-  ai_practice_deletions: ['id','opaque_owner_id','runtime_payload'],
+  ai_practice_usage_ledger: ['id','user_id','opaque_session_id','operation_id','kind','amount_usd','created_at','runtime_payload'],
+  ai_practice_deletions: ['id','opaque_owner_id','opaque_session_id','inventory','state','attempt','claim_token','lease_expires_at','created_at','completed_at','runtime_payload'],
   ai_practice_turns: ['id','session_id','user_id','sequence','runtime_payload'],
   ai_practice_runs: ['id','session_id','user_id','sequence','runtime_payload'],
   ai_practice_assistant_messages: ['id','session_id','user_id','sequence','runtime_payload'],
@@ -109,7 +111,7 @@ function specifications(database: PracticeDatabase): TableSpec[] {
     }))),
     rows('ai_practice_deletions', database.deletions.map(record => entity(record.id, record, {
       id: record.id, opaque_owner_id: record.ownerId, opaque_session_id: record.sessionId, inventory: json(record.objectKeys),
-      state: record.state, attempt: 0, created_at: record.createdAt, completed_at: record.completedAt ?? null,
+      state: record.state, attempt: record.cleanup?.attempt ?? 0, claim_token: record.cleanup?.claimToken ?? null, lease_expires_at: record.cleanup?.leaseExpiresAt ?? null, created_at: record.createdAt, completed_at: record.completedAt ?? null,
       expires_at: new Date(new Date(record.createdAt).getTime() + 30 * 86_400_000).toISOString(),
     }))),
     ...(database.accountClosings === undefined ? [] : [rows(closingTable, Object.values(database.accountClosings).map(record => entity(record.ownerId, record, { opaque_owner_id: record.ownerId, request_id: record.requestId, fingerprint: record.fingerprint, cleanup_id: record.cleanupId, created_at: record.createdAt })), ['opaque_owner_id'])]),
@@ -205,12 +207,16 @@ export class PostgresPracticeStore implements PracticeStore {
     }
     for (const row of records.get('ai_practice_usage_ledger')!) {
       const record = row.runtime_payload as unknown as PracticeDatabase['ledger'][number];
-      if (record.ownerId !== row.user_id || record.id !== row.id || record.operationId !== row.operation_id) throw unavailable();
+      assertContentFreePosting(record);
+      const at = row.created_at instanceof Date ? row.created_at.getTime() : Date.parse(String(row.created_at));
+      if (record.ownerId !== row.user_id || record.id !== row.id || record.sessionId !== row.opaque_session_id || record.operationId !== row.operation_id || record.kind !== row.kind || Number(record.amountUsd.toFixed(8)) !== Number(row.amount_usd) || Date.parse(record.createdAt) !== at) throw unavailable();
       db.ledger.push(record);
     }
     for (const row of records.get('ai_practice_deletions')!) {
       const record = row.runtime_payload as unknown as PracticeDatabase['deletions'][number];
-      if (record.id !== row.id || record.ownerId !== row.opaque_owner_id) throw unavailable(); db.deletions.push(record);
+      const time = (value: unknown) => value === null || value === undefined ? null : value instanceof Date ? value.getTime() : Date.parse(String(value));
+      if (record.id !== row.id || record.ownerId !== row.opaque_owner_id || record.sessionId !== row.opaque_session_id || time(record.createdAt) !== time(row.created_at) || record.state !== row.state || canonical(record.objectKeys) !== canonical(row.inventory)
+        || (record.cleanup?.attempt ?? 0) !== Number(row.attempt) || (record.cleanup?.claimToken ?? null) !== row.claim_token || time(record.cleanup?.leaseExpiresAt) !== time(row.lease_expires_at) || time(record.completedAt) !== time(row.completed_at)) throw unavailable(); db.deletions.push(record);
     }
     for (const row of records.get(closingTable) ?? []) {
       const record = row.runtime_payload as unknown as NonNullable<PracticeDatabase['accountClosings']>[string];
@@ -291,6 +297,7 @@ export class PostgresPracticeStore implements PracticeStore {
   private async persist(client: PoolClient, before: PracticeDatabase, after: PracticeDatabase) {
     if (after.schemaVersion !== 1 || Buffer.byteLength(json(after)) > this.options.maxStateBytes) throw new DomainError('unavailable', 'Initial persistence adapter capacity exceeded; changes were rolled back.');
     validateStoredEvents(after);
+    after.ledger.forEach(assertContentFreePosting);
     preserveAccountClosings(before, after);
     if (before.accountClosings === undefined && after.accountClosings !== undefined) throw unavailable();
     this.validateImmutable(before, after);
@@ -382,6 +389,30 @@ export class PostgresPracticeStore implements PracticeStore {
   }
   /** Trusted extensions can join the current transaction; never retain this client beyond the callback. */
   currentTransactionClient(): PoolClient | undefined { return this.transactionContext.getStore(); }
+  async assertDurableAccounting(): Promise<void> {
+    const client = this.currentTransactionClient();
+    if (!client || this.options.advisoryLockKey !== 843_239_117) throw unavailable();
+    const rows = (await client.query<SchemaCapability>(readinessSchemaQuery, [['ai_practice_usage_ledger']])).rows;
+    if (rows.length !== 1 || !durableLedgerReady(rows[0])) throw new DomainError('unavailable', 'Permanent account closing requires durable private usage accounting. No additional content was erased.');
+  }
+  async assertPrivateCleanupReady(): Promise<void> {
+    const client = this.currentTransactionClient();
+    if (!client || this.options.advisoryLockKey !== 843_239_117) throw unavailable();
+    const rows = (await client.query<SchemaCapability>(readinessSchemaQuery, [readinessTableNames])).rows;
+    if (!schemaCapabilitiesReady(rows, { accountClosing: true })) throw unavailable();
+    // This destructive boundary also requires a permanent, nonremovable fence
+    // with its exact RESTRICT anchor, and no residual owner ledger policy.
+    const boundary = (await client.query<Record<string, boolean>>(`select
+      (select count(*)=0 from pg_catalog.pg_policy where polrelid='public.ai_practice_usage_ledger'::regclass) as "ledgerPoliciesPrivate",
+      (not pg_catalog.has_table_privilege('public.ai_practice_usage_ledger','TRUNCATE')) as "ledgerNoCurrentTruncate",
+      (select count(*)=0 from pg_catalog.pg_policy where polrelid='public.ai_practice_account_closings'::regclass) as "closingPoliciesPrivate",
+      (not pg_catalog.has_table_privilege('service_role','public.ai_practice_account_closings','DELETE,TRUNCATE') and not pg_catalog.has_table_privilege('public.ai_practice_account_closings','DELETE,TRUNCATE')) as "closingNoRemoval",
+      (select count(*)=1 and bool_and(c.convalidated and c.confrelid='public.ai_practice_deletions'::regclass and c.confdeltype='r'
+        and c.conkey=array[(select attnum from pg_catalog.pg_attribute where attrelid=c.conrelid and attname='cleanup_id' and not attisdropped)]::smallint[]
+        and c.confkey=array[(select attnum from pg_catalog.pg_attribute where attrelid=c.confrelid and attname='id' and not attisdropped)]::smallint[])
+        from pg_catalog.pg_constraint c where c.conrelid='public.ai_practice_account_closings'::regclass and c.contype='f') as "closingCleanupRestricted"`)).rows;
+    if (boundary.length !== 1 || ['ledgerPoliciesPrivate','ledgerNoCurrentTruncate','closingPoliciesPrivate','closingNoRemoval','closingCleanupRestricted'].some(name => boundary[0][name] !== true)) throw unavailable();
+  }
   async captureOwnerObjectKeys(ownerId: string): Promise<string[]> {
     const client = this.currentTransactionClient();
     if (!client || this.options.advisoryLockKey !== 843_239_117 || !uuid.test(ownerId)) throw unavailable();

@@ -1,4 +1,5 @@
 import { practiceEventSchema } from '../interview-practice/events';
+import { accountingCheckContract, DURABLE_USAGE_CHECK_SQL } from '../interview-practice/accounting';
 
 type Columns = Record<string, string>;
 const entity = (columns: Columns): Columns => ({ ...columns, runtime_payload: 'jsonb' });
@@ -46,11 +47,13 @@ export type SchemaCapability = {
   triggers: { name: string; procedure: string; schema: string; enabled: string; type: number }[];
   anonymousSelect: boolean; authenticatedSelect: boolean; clientWrites: boolean;
   serviceAccess: boolean; currentAccess: boolean; serviceBypass: boolean; currentBypass: boolean;
+  foreignKeyCount?: number; serviceTruncate?: boolean;
 };
-const serverPrivate = new Set(['ai_practice_jobs', 'ai_practice_ai_calls', 'ai_practice_deletions', 'practice_worker_heartbeats', 'practice_operations_state', 'ai_practice_correction_drafts', 'ai_practice_correction_decisions', 'ai_practice_correction_publications', 'ai_practice_review_audits', 'practice_billing_webhook_events', 'ai_practice_account_closings']);
+const serverPrivate = new Set(['ai_practice_jobs', 'ai_practice_ai_calls', 'ai_practice_usage_ledger', 'ai_practice_deletions', 'practice_worker_heartbeats', 'practice_operations_state', 'ai_practice_correction_drafts', 'ai_practice_correction_decisions', 'ai_practice_correction_publications', 'ai_practice_review_audits', 'practice_billing_webhook_events', 'ai_practice_account_closings']);
 const immutable: Record<string, string> = {
   ai_practice_snapshots: 'ai_practice_snapshot_immutable', ai_practice_events: 'ai_practice_event_immutable', ai_practice_reports: 'ai_practice_report_immutable', ai_practice_evidence_manifests: 'ai_practice_manifest_immutable', ai_practice_turns: 'ai_practice_turn_immutable', ai_practice_runs: 'ai_practice_run_immutable',
   ai_practice_correction_drafts: 'ai_practice_correction_draft_immutable', ai_practice_correction_decisions: 'ai_practice_correction_decision_immutable', ai_practice_correction_publications: 'ai_practice_correction_publication_immutable', ai_practice_review_audits: 'ai_practice_review_audit_immutable',
+  ai_practice_usage_ledger: 'ai_practice_usage_immutable',
 };
 export const readinessTableNames = [...Object.keys(baseline), ...Object.keys(reviews), ...Object.keys(commerce), ...Object.keys(closing)];
 
@@ -59,9 +62,11 @@ export const readinessTableNames = [...Object.keys(baseline), ...Object.keys(rev
 export const readinessSchemaQuery = `select c.relname as name,c.relkind as kind,c.relrowsecurity as "rowSecurity",
   (select coalesce(jsonb_object_agg(a.attname,t.typname),'{}'::jsonb) from pg_catalog.pg_attribute a join pg_catalog.pg_type t on t.oid=a.atttypid where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped) as columns,
   (select coalesce(jsonb_agg(jsonb_build_object('name',x.conname,'definition',pg_catalog.pg_get_constraintdef(x.oid),'validated',x.convalidated)),'[]'::jsonb) from pg_catalog.pg_constraint x where x.conrelid=c.oid and x.contype='c') as checks,
+  (select count(*)::int from pg_catalog.pg_constraint x where x.conrelid=c.oid and x.contype='f') as "foreignKeyCount",
   (select coalesce(jsonb_agg(jsonb_build_object('name',g.tgname,'procedure',p.proname,'schema',n.nspname,'enabled',g.tgenabled,'type',g.tgtype)),'[]'::jsonb) from pg_catalog.pg_trigger g join pg_catalog.pg_proc p on p.oid=g.tgfoid join pg_catalog.pg_namespace n on n.oid=p.pronamespace where g.tgrelid=c.oid and not g.tgisinternal) as triggers,
   pg_catalog.has_any_column_privilege('anon',c.oid,'SELECT') as "anonymousSelect",
   pg_catalog.has_any_column_privilege('authenticated',c.oid,'SELECT') as "authenticatedSelect",
+  pg_catalog.has_table_privilege('service_role',c.oid,'TRUNCATE') as "serviceTruncate",
   (pg_catalog.has_table_privilege('anon',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') or pg_catalog.has_any_column_privilege('anon',c.oid,'INSERT,UPDATE,REFERENCES') or pg_catalog.has_table_privilege('authenticated',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') or pg_catalog.has_any_column_privilege('authenticated',c.oid,'INSERT,UPDATE,REFERENCES')) as "clientWrites",
   (pg_catalog.has_table_privilege('service_role',c.oid,'SELECT') and pg_catalog.has_table_privilege('service_role',c.oid,'UPDATE') and (c.relname='practice_operations_state' or (pg_catalog.has_table_privilege('service_role',c.oid,'INSERT') and (c.relname='ai_practice_account_closings' or pg_catalog.has_table_privilege('service_role',c.oid,'DELETE'))))) as "serviceAccess",
   (pg_catalog.has_table_privilege(c.oid,'SELECT') and pg_catalog.has_table_privilege(c.oid,'UPDATE') and (c.relname='practice_operations_state' or (pg_catalog.has_table_privilege(c.oid,'INSERT') and (c.relname='ai_practice_account_closings' or pg_catalog.has_table_privilege(c.oid,'DELETE'))))) as "currentAccess",
@@ -74,6 +79,17 @@ function eventContract(definition: string): string {
   return normalized.replace(/ARRAY\[([^\]]*)\]/, (_array, values: string) => `ARRAY[${values.split(',').sort().join(',')}]`);
 }
 const expectedEventContract = eventContract(`CHECK (schema_version = 1 AND event_type = ANY (ARRAY[${practiceEventSchema.options.map(option => `'${option.shape.type.value}'`).join(',')}]))`);
+
+/** No Auth/session FK, private ACL, and the reviewed live content-free CHECK.
+ * An immutable UPDATE trigger permits identical replay but forbids rewriting costs. */
+export function durableLedgerReady(row: SchemaCapability | undefined): boolean {
+  const check = row?.checks?.find(item => item.name === 'ai_practice_usage_content_free');
+  return Boolean(row && row.name === 'ai_practice_usage_ledger' && row.kind === 'r' && row.rowSecurity === true && row.foreignKeyCount === 0
+    && row.anonymousSelect === false && row.authenticatedSelect === false && row.clientWrites === false && row.serviceTruncate === false
+    && row.serviceAccess === true && row.currentAccess === true && row.serviceBypass === true && row.currentBypass === true
+    && check?.validated && accountingCheckContract(check.definition) === accountingCheckContract(DURABLE_USAGE_CHECK_SQL)
+    && row.triggers?.some(item => item.name === 'ai_practice_usage_immutable' && item.procedure === 'ai_practice_reject_immutable_update' && item.schema === 'public' && ['O', 'A'].includes(item.enabled) && item.type === 19));
+}
 
 /** Capability check, not a claim of full migration equivalence or hosted RLS qualification. */
 export function schemaCapabilitiesReady(rows: SchemaCapability[], features: ReadinessFeatures = {}): boolean {
@@ -104,6 +120,7 @@ export function schemaCapabilitiesReady(rows: SchemaCapability[], features: Read
   }
   const eventCheck = byName.get('ai_practice_events')?.checks?.find(check => check.name === 'ai_practice_events_event_type_check');
   if (!eventCheck?.validated || eventContract(eventCheck.definition) !== expectedEventContract) return false;
+  if (!durableLedgerReady(byName.get('ai_practice_usage_ledger'))) return false;
   if (features.voice && !byName.get('ai_practice_usage_ledger')?.checks?.some(check => check.name === 'ai_practice_voice_metadata' && check.validated)) return false;
   return true;
 }

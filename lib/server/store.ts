@@ -6,11 +6,13 @@ import { DomainError } from '../interview-practice/domain';
 import { parseSessionEvents } from '../interview-practice/events';
 import type { PracticeDatabase } from '../interview-practice/types';
 import { preserveAccountClosings, validateAccountClosings } from '../interview-practice/account-closing';
+import { validateStoredPrivateCleanup } from '../interview-practice/private-cleanup';
 
 export const emptyDatabase = (): PracticeDatabase => ({ schemaVersion: 1, sessions: {}, requests: {}, ledger: [], deletions: [] });
 /** Persistence validation rejects the whole operation; it never drops a bad replay record. */
 export function validateStoredEvents(database: PracticeDatabase) {
   validateAccountClosings(database);
+  validateStoredPrivateCleanup(database);
   try {
     for (const [id, session] of Object.entries(database.sessions)) {
       if (session.id !== id) throw new Error('invalid_session_identity');
@@ -27,6 +29,10 @@ export interface PracticeStore {
   readonly supportsAccountClosing?: boolean;
   /** Trusted transaction-only extension; returns no learner contents. */
   captureOwnerObjectKeys?(ownerId: string): Promise<string[]>;
+  /** PostgreSQL must verify durable private accounting before permanent close. */
+  assertDurableAccounting?(): Promise<void>;
+  /** Trusted transaction-only preflight before private object cleanup and progress. */
+  assertPrivateCleanupReady?(): Promise<void>;
 }
 // This adapter deliberately targets one local machine. Public deployments must select a qualified database adapter.
 export class FilePracticeStore implements PracticeStore {

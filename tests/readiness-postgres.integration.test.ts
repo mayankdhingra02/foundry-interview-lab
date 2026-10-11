@@ -52,6 +52,8 @@ describe.skipIf(!enabled)('readiness against real PostgreSQL schema and effectiv
     'grant select(id) on public.ai_practice_jobs to authenticated',
     'grant select on public.ai_practice_ai_calls to anon',
     'grant update(runtime_payload) on public.ai_practice_usage_ledger to authenticated',
+    'grant select(id) on public.ai_practice_usage_ledger to authenticated',
+    'grant select on public.ai_practice_usage_ledger to anon',
   ])('rejects unsafe effective client privilege: %s', async sql => { await rejectAlteration(sql); });
   it('rejects disabled RLS and missing trusted server read access', async () => {
     await rejectAlteration('alter table public.ai_practice_sessions disable row level security');
@@ -67,5 +69,10 @@ describe.skipIf(!enabled)('readiness against real PostgreSQL schema and effectiv
   it('requires configured voice constraints and complete support schemas', async () => {
     await rejectAlteration('alter table public.ai_practice_usage_ledger drop constraint ai_practice_voice_metadata', { voice: true });
     await rejectAlteration('drop table public.ai_practice_correction_publications', { reviews: true });
+  });
+  it('requires durable accounting before reporting the closing capability ready', async () => {
+    await rejectAlteration('alter table public.ai_practice_usage_ledger drop constraint ai_practice_usage_content_free');
+    await rejectAlteration('alter table public.ai_practice_usage_ledger disable trigger ai_practice_usage_immutable');
+    await rejectAlteration('alter table public.ai_practice_usage_ledger add constraint synthetic_auth_fk foreign key(user_id) references auth.users(id) on delete cascade not valid');
   });
 });
